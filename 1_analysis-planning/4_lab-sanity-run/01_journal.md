@@ -153,3 +153,25 @@ Not part of the pipeline itself, but required to push results from `login02`:
 - **.gitignore:** added `.kilo/` and `.kilo-tmp/` so the local agent state isn't committed.
 
 Current branch: `lab-sanity-run_LCH` (one commit ahead of `origin/pbp`), pushed to GitHub.
+
+## 2026-06-29 — First green end-to-end run
+
+Continued from task-04-report milestone. Two further bugs surfaced, both fixed:
+
+1. **LigandRMSD KeyError 'Entry'**: `select_best_docked_structures` could return a
+   columnless DataFrame, breaking the downstream `groupby(['Entry','best_structure'])`.
+   Fixed by guaranteeing the returned df has the expected schema even when
+   `best_structures` list is empty. Patch saved at
+   `patches/01_ligandRMSD_empty_best_structures_LCH.patch`. Diagnostic approach
+   was to replace the silent `except` with a re-raising one to get the real
+   traceback, then strip the diagnostic noise after verification.
+
+2. **fpocket missing**: GeometricFilters stage requires the `fpocket` binary
+   which isn't in the README install recipe. Fixed with
+   `conda install -n filterzyme -c conda-forge fpocket -y` (got 4.2.2).
+   Snapshot at `~/filterzyme-sanity/conda_pre_fpocket_LCH.txt` for revert.
+
+**Result**: exit code 0, 9 rows × 67 cols, 232 output files. Defensive snapshots
+at `~/filterzyme-sanity/{conda_green,pip_green,PDE_2H_LCH/sanity-run_LCH_full-green}*`.
+
+See `04_first_green_run.md` for the full write-up.

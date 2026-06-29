@@ -1,0 +1,15 @@
+--- /mnt/labs/data/mora/code/Filterzyme/filterzyme/steps/computeligandRMSD_step.py	2025-12-22 15:08:04.431632941 +0100
++++ /mnt/storage01/home/lherrmann/envs/filterzyme/lib/python3.11/site-packages/filterzyme/steps/computeligandRMSD_step.py	2026-06-29 11:08:18.056926088 +0200
+@@ -308,6 +308,12 @@
+                     'method': 'vina_avg_intra_tool'
+                 })
+ 
++    # LCH: guarantee schema even when no entry yielded a best structure (e.g. all entries
++    # had only one tool, all RMSDs NaN, or SMILES were missing). Downstream code groups by
++    # ['Entry', 'best_structure'] and would otherwise raise KeyError on a columnless df.
++    expected_cols = ['Entry', 'tool', 'best_structure', 'avg_ligandRMSD', 'method']
++    if not best_structures:
++        return pd.DataFrame(columns=expected_cols)
+     return pd.DataFrame(best_structures)
+ 
+ 
