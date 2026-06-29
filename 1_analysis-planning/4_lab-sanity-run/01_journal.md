@@ -133,3 +133,23 @@ $HOME/filterzyme-sanity/produced-files_LCH.txt                       # file inve
 - 03 (characterize): full traceback + file inventory + verdict table for the new ligandRMSD break.
 - 04 (report): fill `08_report_template.md`.
 - Optional follow-up: small patch to `extract_docking_metrics` to complete ligandRMSD and reach Stage C (GeometricFilters). Out of scope for the original plan but tempting given how close we are.
+
+## 2026-06-26 — Cluster meta-setup (git + GitHub CLI)
+
+Not part of the pipeline itself, but required to push results from `login02`:
+
+- **Git identity** (one-time, global):
+  ```
+  git config --global user.name "Luca Herrmann"
+  git config --global user.email "luca.herrmann98@gmail.com"
+  ```
+- **GitHub CLI** is available as a module — not loaded by default:
+  ```
+  module load gh/2.92.0
+  gh auth login        # web-browser device-code flow
+  ```
+  After `gh auth login` succeeds, `git push` to HTTPS remotes works without a PAT prompt.
+- **Branching:** new work branches off `origin/pbp` (Ariane's latest, 2026-06-25), not `main` (Nov 2025). `main` is months behind the lab's actual state.
+- **.gitignore:** added `.kilo/` and `.kilo-tmp/` so the local agent state isn't committed.
+
+Current branch: `lab-sanity-run_LCH` (one commit ahead of `origin/pbp`), pushed to GitHub.
