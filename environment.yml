@@ -24,6 +24,7 @@ dependencies:
   #   - freesasa
   #   - docko
   #   - chai_lab
+  #   - squidly  # catalytic-residue prediction CLI; requires GPU for ESM2 inference
 
 
 #   import sys

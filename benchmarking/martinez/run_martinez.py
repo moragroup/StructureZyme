@@ -6,12 +6,6 @@ import sys
 import argparse
 from pathlib import Path 
 
-
-
-sys.path.insert(0, '/nvme2/helen/EnzymeStructuralFiltering/')
-import filterzyme
-print(filterzyme.__file__)  
-
 from filterzyme.pipeline_v2 import Pipeline
 from filterzyme.pipeline_v2 import Docking
 from filterzyme.pipeline_v2 import Superimposition

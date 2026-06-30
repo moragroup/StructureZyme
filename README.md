@@ -26,7 +26,14 @@ cd Filterzyme
 python setup.py sdist bdist_wheel
 pip install dist/filterzyme-0.0.6.tar.gz --use-deprecated=legacy-resolver
 pip install enzymetk==0.0.8
+pip install squidly
+python -c "import squidly, os; os.system(f'python {os.path.dirname(squidly.__file__)}/download_models_hf.py')"
 ```
+
+> **Catalytic-residue prediction requires the `squidly` CLI** (installed above).
+> The model weights are downloaded from HuggingFace on first setup. See
+> [`1_analysis-planning/3_setup-sanity-check/10_squidly_install.md`](1_analysis-planning/3_setup-sanity-check/10_squidly_install.md)
+> for details and troubleshooting. ESM2 inference requires a GPU.
 
 ### Download Boltz cache
 
@@ -51,11 +58,16 @@ df = pd.DataFrame({
 pipeline = Pipeline(
     df=df,
     boltz_cache_dir="/path/to/boltz/cache",
-    skip_catalytic_residue_prediction=True,
     base_output_dir="pipeline_output"
 )
 pipeline.run()
 ```
+
+By default the pipeline predicts catalytic residues with Squidly (ESM2 3B
+ensemble) before docking. To select the larger ESM2 backbone, pass
+`squidly_model_size='15B'` (~40 GB VRAM). To skip catalytic-residue
+prediction entirely (e.g. for de-novo enzymes where it is unreliable), pass
+`skip_catalytic_residue_prediction=True`.
 
 ### Running with Vina
 

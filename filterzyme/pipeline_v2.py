@@ -27,7 +27,7 @@ from filterzyme.steps.plip_step import PLIP
 
 from enzymetk.dock_chai_step import Chai
 from enzymetk.dock_boltz_step import Boltz
-from enzymetk.predict_catalyticsite_step import ActiveSitePred
+from filterzyme.steps.squidly_step import Squidly
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -57,7 +57,10 @@ class Docking:
         run_vina: bool = False,
         alternative_structure_for_vina: str = 'Chai',
         use_msa_server: bool = True,
-        num_threads: int = 1
+        num_threads: int = 1,
+        squidly_model_size: str = '3B',
+        squidly_as_threshold: float | None = None,
+        squidly_num_threads: int | None = None,
     ):
         self.df = df.copy()
         self.boltz_cache_dir = boltz_cache_dir
@@ -67,6 +70,9 @@ class Docking:
         self.alternative_structure_for_vina = alternative_structure_for_vina
         self.use_msa_server = use_msa_server
         self.num_threads = num_threads
+        self.squidly_model_size = squidly_model_size
+        self.squidly_as_threshold = squidly_as_threshold
+        self.squidly_num_threads = squidly_num_threads if squidly_num_threads is not None else num_threads
         self.output_dir = Path(output_dir)
         self.metagenomic_enzymes = metagenomic_enzymes
         self.output_dir.mkdir(exist_ok=True, parents=True)
@@ -76,6 +82,17 @@ class Docking:
         if self.skip_catalytic_residue_prediction:
             log_section("Skipping catalytic residue prediction")
             df_squidly = self.df
+            if self.run_vina:
+                has_vina_residues = (
+                    'vina_residues' in df_squidly.columns
+                    and df_squidly['vina_residues'].astype(str).str.strip().ne('').any()
+                )
+                if not has_vina_residues:
+                    log_boxed_note(
+                        "WARNING: skip_catalytic_residue_prediction=True with run_vina=True "
+                        "and no vina_residues provided. Vina will have no pocket definition "
+                        "and entries without vina_residues will be dropped before docking."
+                    )
         else:
             log_section("Predicting active site residues")
             df_squidly = self._catalytic_residue_prediction()
@@ -95,15 +112,18 @@ class Docking:
     def _catalytic_residue_prediction(self):
         self.df['Sequence'] = self.df['Sequence'].apply(clean_protein_sequence)
 
-        reps  = (self.df[['Entry','Sequence']]
-            .drop_duplicates(subset='Sequence', keep='first')
-            .rename(columns={'Entry': 'rep_entry'}))
-        pred_in = reps.rename(columns={'rep_entry': 'Entry'})
-        
-        df_cat_res = pred_in << ActiveSitePred('Entry', 'Sequence')
-        residues = dict(zip(df_cat_res.label, df_cat_res.Squidly_Ensemble_Residues))
-        df_squidly = self.df.copy()
-        df_squidly['Squidly_CR_Position'] = [residues.get(e) for e in df_squidly['Entry'].values]
+        # The Squidly wrapper handles: CLI invocation, sequence dedup,
+        # column renaming (Squidly_Ensemble_Residues -> Squidly_CR_Position),
+        # and broadcasting predictions back to the full DataFrame.
+        squidly_step = Squidly(
+            sequence_col='Sequence',
+            id_col='Entry',
+            model_size=self.squidly_model_size,
+            as_threshold=self.squidly_as_threshold,
+            num_threads=self.squidly_num_threads,
+        )
+        df_squidly = squidly_step.execute(self.df)
+
         # Remove entries without catalytic residues for proteins without user-specified residues for vina-docking
         if 'vina_residues' not in df_squidly.columns:
             df_squidly['vina_residues'] = None
@@ -164,6 +184,15 @@ class Docking:
         boltz_args = ['--cache', str(self.boltz_cache_dir)]
         if self.use_msa_server:
             boltz_args.append('--use_msa_server')
+        # `--no_kernels` disables Boltz's optional CUDA fused kernels that
+        # require the `cuequivariance_ops_torch` package. Without this flag,
+        # Boltz inference raises ImportError mid-forward, silently leaves an
+        # empty `predictions/` directory, and the pipeline downstream sees no
+        # CIF files (boltz_files_for_superimposition=[]). That in turn yields
+        # an empty LigandRMSD output and a KeyError on `docked_structure` in
+        # extract_docking_metrics. The pure-PyTorch fallback is slower but
+        # always available.
+        boltz_args.append('--no_kernels')
 
         df_boltz = df_chai << (Boltz('Entry', 'Sequence', 'substrate_smiles', 'cofactor_smiles', boltz_dir, self.num_threads, 
                                      args=boltz_args)
@@ -403,7 +432,10 @@ class Pipeline:
                 use_msa_server: bool = True,
                 num_threads: int = 1,
                 squidly_dir: Union[str, Path] = '',
-                base_output_dir: Union[str, Path] = "pipeline_output"
+                base_output_dir: Union[str, Path] = "pipeline_output",
+                squidly_model_size: str = '3B',
+                squidly_as_threshold: float | None = None,
+                squidly_num_threads: int | None = None,
                 ):
                  
         self.df = df.copy()
@@ -417,6 +449,9 @@ class Pipeline:
         self.use_msa_server = use_msa_server
         self.num_threads = num_threads
         self.squidly_dir = squidly_dir
+        self.squidly_model_size = squidly_model_size
+        self.squidly_as_threshold = squidly_as_threshold
+        self.squidly_num_threads = squidly_num_threads
         self.base_output_dir = Path(base_output_dir)
         self.base_output_dir.mkdir(exist_ok=True, parents=True)
 
@@ -433,6 +468,9 @@ class Pipeline:
             alternative_structure_for_vina=self.alternative_structure_for_vina,
             use_msa_server=self.use_msa_server,
             num_threads=self.num_threads,
+            squidly_model_size=self.squidly_model_size,
+            squidly_as_threshold=self.squidly_as_threshold,
+            squidly_num_threads=self.squidly_num_threads,
         )
         docking.run()
 
