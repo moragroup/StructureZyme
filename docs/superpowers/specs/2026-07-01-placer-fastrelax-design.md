@@ -155,7 +155,8 @@ files, which are deleted as part of this work)
 | `input_col` | `str` | required | Column pointing to the final relaxed/selected structure per entry (from `structural_features_final.pkl`) |
 | `entry_col` | `str` | `"Entry"` | Entry identifier column |
 | `output_dir` | `str` | required | Directory for PLACER outputs |
-| `placer_script_path` | `str` | required | Path to `run_PLACER.py` (or resolved from a `PLACER_HOME` env var); validated at construction — raises `FileNotFoundError` with a clear message if missing. No sibling-repo assumption, unlike the old dead code. |
+| `placer_script_path` | `str` | `"/mnt/labs/data/mora/software/PLACER/run_PLACER.py"` | Path to `run_PLACER.py`; validated at construction — raises `FileNotFoundError` with a clear message if missing. Overridable for use outside this lab's shared software directory. No sibling-repo assumption, unlike the old dead code. |
+| `placer_conda_env` | `str` | `"placer_env"` | Name of the conda env PLACER's subprocess is run through (its own dedicated env, pinned to `pytorch=2.3.*`/`dgl=2.4.0`, incompatible with the `filterzyme` env) |
 | `predict_ligand` | `str` | required | Ligand resname passed to PLACER |
 | `nsamples` | `int` | `50` | PLACER sample count |
 | `rerank` | `str` | `"prmsd"` | PLACER rerank metric |
@@ -168,11 +169,14 @@ files, which are deleted as part of this work)
 2. Per entry, count ligand instances in the structure (reuse the existing
    `_count_ligands` logic from `PLACER_forChai_step.py`) to decide single-
    vs multi-ligand mode.
-3. Shell out via `subprocess.run` to `run_PLACER.py` with
-   `--ifile / --odir / --rerank / -n / --predict_ligand`, adding
-   `--predict_multi` when multi-ligand is detected. On `AssertionError`
-   from multi-mode, fall back to single-mode (same fallback logic as the
-   old `PLACER_forChai_step.py`).
+3. Shell out via `subprocess.run` to `run_PLACER.py`, invoked through the
+   `placer_conda_env` conda environment (e.g.
+   `["conda", "run", "-n", self.placer_conda_env, "python",
+   str(self.placer_script_path), "--ifile", ..., "--odir", ..., "--rerank",
+   ..., "-n", ..., "--predict_ligand", ...]`), adding `--predict_multi`
+   when multi-ligand is detected. On `AssertionError` from multi-mode,
+   fall back to single-mode (same fallback logic as the old
+   `PLACER_forChai_step.py`).
 4. Parse PLACER's output CSV; extract the configured rerank metric
    (`prmsd` by default) and any confidence score.
 5. Merge `placer_prmsd`, `placer_confidence`, `placer_dir` back onto the
@@ -212,7 +216,8 @@ on `run_fastrelax`, inserted immediately after
 New constructor parameters:
 
 - `run_placer: bool = False`
-- `placer_script_path: str = ''`
+- `placer_script_path: str = "/mnt/labs/data/mora/software/PLACER/run_PLACER.py"`
+- `placer_conda_env: str = "placer_env"`
 - `placer_predict_ligand: str = ''`
 - `placer_nsamples: int = 50`
 - `placer_rerank: str = "prmsd"`
@@ -244,11 +249,64 @@ parameters are today (`Pipeline.run()` passes them through to `Docking`).
   expensive (roughly an order of magnitude slower than ligand-focused mode
   for a ~300-residue enzyme) and is not the default; no special
   parallelization or GPU offload is designed for it in this phase.
-- **PLACER/PyRosetta installation and packaging.** Neither dependency is
-  added to `environment.yml` or `setup.py` as part of this design's
-  scope beyond documenting the required constructor parameters
-  (`placer_script_path`, PyRosetta import). Installation instructions are
-  an implementation-plan concern, not a design concern.
+- **Adding PyRosetta/PLACER to `environment.yml` or `setup.py` as a hard
+  dependency.** Both remain optional, path-configured dependencies (see
+  "Shared Software Locations" below); they are not added to the base
+  `filterzyme` install requirements.
+
+## Shared Software Locations
+
+Both external tools are installed once under a shared lab directory
+(`/mnt/labs/data/mora/software/`) rather than per-project, to avoid
+redundant installs/downloads across projects that use them. The two tools
+have different sharing models because of how they're invoked:
+
+### PyRosetta — `/mnt/labs/data/mora/software/RosettaFastRelax/`
+
+FastRelax calls `pyrosetta.init()` **in-process**, inside the same Python
+interpreter that runs the filterzyme pipeline (see Component: FastRelax
+Step above). PyRosetta ships as compiled binary wheels tied to a specific
+Python version/ABI; importing a shared install into an unrelated project's
+interpreter via `sys.path` manipulation risks ABI mismatches (import errors
+or segfaults) and is not how any existing dependency in this codebase is
+handled.
+
+Therefore PyRosetta is **installed directly into the `filterzyme` conda
+env** (matching the existing `squidly` CLI precedent in
+`filterzyme/steps/squidly_step.py`, which is installed into the same env
+and checked via `shutil.which`). `/mnt/labs/data/mora/software/RosettaFastRelax/`
+stores the downloaded installer/wheel artifact (PyRosetta's own download,
+which requires a free academic license from rosettacommons.org) so that
+re-installing PyRosetta into other projects' envs does not re-download it
+from the network each time. It does **not** store an installed
+site-packages tree that gets imported cross-env.
+
+`FastRelax.__init__` does not take a PyRosetta-location parameter — it
+simply does `import pyrosetta` and raises a clear `RuntimeError` (mirroring
+`Squidly`'s `shutil.which("squidly")` check) if the import fails, pointing
+the user at the shared installer location for re-installation instructions.
+
+### PLACER — `/mnt/labs/data/mora/software/PLACER/`
+
+PLACER is invoked via `subprocess.run(["python", "run_PLACER.py", ...])` —
+a separate OS process, isolated from the filterzyme interpreter. This has
+no binary-compatibility constraint, so **one shared clone of the PLACER
+repository is safe to reuse across projects**.
+
+The PLACER repository (`github.com/baker-laboratory/PLACER`) is cloned
+once to `/mnt/labs/data/mora/software/PLACER/`, containing `run_PLACER.py`,
+its bundled model weights, and its own dedicated conda env definition
+(`envs/placer_env.yml` — pinned to `pytorch=2.3.*`, `dgl=2.4.0`, and other
+versions incompatible with the `filterzyme` env's own dependencies, which
+is why PLACER runs as a subprocess in a separate env rather than being
+imported).
+
+`PLACER.__init__`'s `placer_script_path` parameter defaults to
+`/mnt/labs/data/mora/software/PLACER/run_PLACER.py`, remaining overridable
+for use outside this specific lab environment. The subprocess command is
+invoked through the `placer_env` conda environment (e.g. via
+`conda run -n placer_env python <placer_script_path> ...`), not the
+`filterzyme` env's interpreter.
 
 ## Testing Strategy (TDD)
 
