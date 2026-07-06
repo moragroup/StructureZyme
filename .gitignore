@@ -248,3 +248,6 @@ models/
 
 .kilo/
 .kilo-tmp/
+
+# Git worktrees (isolated workspaces for feature branches)
+.worktrees/
