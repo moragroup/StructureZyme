@@ -7,9 +7,11 @@
 the actual pipeline code (not just the prior repo-analysis docs) found that
 several assumptions in the original version of this spec did not match
 reality: the shape of the data at each pipeline stage, the ranking metrics
-available per docking engine, and where a full protein+ligand complex file
-first exists for each engine. Sections below have been corrected in place;
-see "Ground-Truth Corrections" for a summary of what changed and why.
+available per docking engine, where a full protein+ligand complex file
+first exists for each engine, and how a PLACER-consumable PDB path is
+obtained from `structural_features_final.pkl`. Sections below have been
+corrected in place; see "Ground-Truth Corrections" for a summary of what
+changed and why.
 
 ## Goal
 
@@ -117,6 +119,18 @@ consistent with them.
    "skip the old conversion step for relaxed structures" branch is needed,
    because FastRelax runs strictly after that conversion, replacing the
    paths in those same columns in place.
+
+5. **`structural_features_final.pkl` has no PDB-path column.** It carries
+   only the `docked_structure` string ID (e.g. `"Q97WW0_0_chai"`); every
+   existing downstream consumer of this file/stage
+   (`GeneralGeometricFiltering`, `EsteraseGeometricFiltering`, `LigandSASA`,
+   `PLIP`, `Fpocket`) reconstructs the actual PDB path itself as
+   `preparedfiles_dir / f"{docked_structure}.pdb"` against the
+   `preparedfiles_for_superimposition/` directory — there is no `input_col`
+   pointing at a ready-made path, contrary to the original version of this
+   spec. **Decision:** the `PLACER` step takes a `preparedfiles_dir`
+   parameter and reconstructs each selected row's PDB path the same way
+   (see Component: PLACER Step, "Constructor Parameters").
 
 ## Architecture: Pipeline Placement & Data Flow
 
@@ -311,8 +325,9 @@ files, which are deleted as part of this work)
 
 | Parameter | Type | Default | Purpose |
 |---|---|---|---|
-| `input_col` | `str` | required | Column pointing to the structure PDB path (from `structural_features_final.pkl`) |
+| `preparedfiles_dir` | `str` | required | Directory of per-pose complex PDBs, matching the `GeneralGeometricFiltering`/`LigandSASA`/`PLIP` convention: the PDB for a row is reconstructed as `preparedfiles_dir / f"{docked_structure}.pdb"` (see "Ground-Truth Corrections" — `structural_features_final.pkl` has no PDB-path column) |
 | `entry_col` | `str` | `"Entry"` | Entry identifier column |
+| `structure_col` | `str` | `"docked_structure"` | Column with the structure ID string used to build the PDB filename above |
 | `output_dir` | `str` | required | Directory for PLACER outputs |
 | `placer_script_path` | `str` | `"/mnt/labs/data/mora/software/PLACER/run_PLACER.py"` | Path to `run_PLACER.py`; validated at construction — raises `FileNotFoundError` with a clear message if missing. Overridable for use outside this lab's shared software directory. No sibling-repo assumption, unlike the old dead code. |
 | `placer_conda_env` | `str` | `"placer_env"` | Name of the conda env PLACER's subprocess is run through (its own dedicated env, pinned to `pytorch=2.3.*`/`dgl=2.4.0`, incompatible with the `filterzyme` env) |
@@ -345,13 +360,17 @@ is unit-tested directly, independent of the `PLACER` step class.
 
 ### Behavior
 
-1. Validate `placer_script_path` exists and required columns are present
-   in the input DataFrame.
+1. Validate `placer_script_path` exists, `preparedfiles_dir` exists, and
+   required columns (`entry_col`, `structure_col`, `is_best`, `best_method`)
+   are present in the input DataFrame.
 2. Call `_select_one_per_entry` to reduce the input to one row per entry.
-3. Per entry, count ligand instances in the structure (reuse the existing
+3. For each selected row, build its PDB path as
+   `Path(preparedfiles_dir) / f"{row[structure_col]}.pdb"` (there is no
+   PDB-path column to read directly — see "Ground-Truth Corrections").
+4. Per entry, count ligand instances in the structure (reuse the existing
    `_count_ligands` logic from `PLACER_forChai_step.py`) to decide single-
    vs multi-ligand mode.
-4. Shell out via `subprocess.run` to `run_PLACER.py`, invoked through the
+5. Shell out via `subprocess.run` to `run_PLACER.py`, invoked through the
    `placer_conda_env` conda environment (e.g.
    `["conda", "run", "-n", self.placer_conda_env, "python",
    str(self.placer_script_path), "--ifile", ..., "--odir", ..., "--rerank",
@@ -359,12 +378,12 @@ is unit-tested directly, independent of the `PLACER` step class.
    when multi-ligand is detected. On `AssertionError` from multi-mode,
    fall back to single-mode (same fallback logic as the old
    `PLACER_forChai_step.py`).
-5. Parse PLACER's output CSV; extract the configured rerank metric
+6. Parse PLACER's output CSV; extract the configured rerank metric
    (`prmsd` by default) and any confidence score.
-6. Merge `placer_prmsd`, `placer_confidence`, `placer_dir` back onto the
+7. Merge `placer_prmsd`, `placer_confidence`, `placer_dir` back onto the
    (already-reduced-to-one-row-per-entry) DataFrame by `Entry` — one row per
    entry in, one row per entry out; no row explosion.
-7. On subprocess failure or missing output for an entry, log and set that
+8. On subprocess failure or missing output for an entry, log and set that
    entry's PLACER columns to `None`; never abort the whole run.
 
 ### Testability
@@ -448,7 +467,11 @@ the `Superimposition(...)` constructor call (alongside the existing
 composing the `PLACER` step, following the same
 `Docking`/`Superimposition`/`GeometricFilters` class pattern already used in
 `pipeline_v2.py`) over `geometricfiltering/structural_features_final.pkl`,
-and overwrite that file with the merged result.
+passing `preparedfiles_dir=Path(self.base_output_dir) / "superimposition" /
+"preparedfiles_for_superimposition"` (the same directory
+`GeometricFilters` itself reads from, via
+`Superimposition._prepare_files_for_superimposition`'s
+`preparedfiles_dir`), and overwrite that file with the merged result.
 
 All new `Superimposition`/`Pipeline` constructor parameters are
 forwarded exactly as the existing `squidly_*` and
