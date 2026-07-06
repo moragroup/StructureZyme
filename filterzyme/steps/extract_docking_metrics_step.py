@@ -43,6 +43,11 @@ def parse_vina_output(file_path):
     return docking_results
 
 
+def _vina_log_path(vina_dir, entry, substrate_name) -> Path:
+    """Build the path to the Vina log file written by `dock_vina()`."""
+    return Path(vina_dir) / f"{entry}-{substrate_name}_log.txt"
+
+
 def extract_chai_metrics(npz_path):
     '''
     Extract chai metrics from npz files.
@@ -228,6 +233,19 @@ class DockingMetrics(Step):
                     print(f"failed to parse {json_file.name}: {e}")
 
             row_result.update(boltz2_metrics_per_model)
+
+            # ---Extract vina docking metrics---
+            vina_affinities = {}
+            vina_dir_val = row.get('vina_dir')
+            if vina_dir_val and pd.notna(vina_dir_val):
+                log_path = _vina_log_path(vina_dir_val, entry_name, ligand_name)
+                if log_path.exists():
+                    try:
+                        vina_affinities = parse_vina_output(log_path)
+                    except Exception as e:
+                        print(f"Failed to parse vina log {log_path}: {e}")
+            row_result['vina_affinities'] = vina_affinities
+
             results.append(row_result)
 
         return results
