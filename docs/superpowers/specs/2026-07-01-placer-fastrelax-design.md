@@ -253,12 +253,22 @@ by the existing docking-metrics code (`extract_docking_metrics_step.py`):
   (populated by Task 1). Lower (more negative, kcal/mol) is better.
 
 To go from a dict key back to the actual file path in
-`chai_files_for_superimposition` / etc., match on the file's stem suffix:
-a Chai path's stem is `"{Entry}_{idx}_chai"`, so its confidence key is the
-stem with the trailing `_chai` removed; analogously `_boltz`/`_vina` for the
-other two engines (this reuses the same suffix-stripping idea as
+`chai_files_for_superimposition` / `boltz_files_for_superimposition`, strip
+the trailing `_chai`/`_boltz` engine suffix from the file's stem (mirroring
 `get_tool_from_structure_name` in `computeligandRMSD_step.py`, applied in
-reverse).
+reverse): a Chai path's stem `"{Entry}_{idx}_chai"` becomes confidence key
+`"{Entry}_{idx}"`; a Boltz path's stem `"{Entry}_model_{idx}_boltz"` becomes
+confidence key `"{Entry}_model_{idx}"`.
+
+**Vina is different and does NOT use suffix-stripping**: a Vina path's stem
+is `"{entry_name}_{i}_vina"` (from `PrepareVina`'s
+`f"{entry_name}_{i}_vina.pdb"` naming), but `vina_affinities` is keyed by
+the **bare integer pose number** `i` (e.g. `1`), not by the string
+`"{entry_name}_{i}"` — stripping the `_vina` suffix would produce the wrong
+key. Instead, extract `i` as `int(stem.split('_')[-2])`, mirroring the
+existing `extract_vina_index` helper in `filterzyme/utils/helpers.py`
+(`add_metrics`), which does exactly this to look up `vina_affinities`
+elsewhere in the pipeline.
 
 ### Behavior
 
@@ -303,8 +313,9 @@ reverse).
 - `_select_top_k` (per-engine ranking/selection logic, including the
   ascending-vs-descending direction switch): pure Python, no Rosetta
   dependency — always-run unit tests.
-- Dict-key ↔ file-path matching (stripping `_chai`/`_boltz`/`_vina` suffixes):
-  pure Python — always-run unit tests.
+- Dict-key ↔ file-path matching (stripping `_chai`/`_boltz` suffixes for
+  Chai/Boltz; extracting the integer pose number for Vina): pure Python —
+  always-run unit tests.
 - MoveMap/selector parameter construction (shell radius, constraint weight
   wiring): testable by asserting on the constructed selector/movemap
   objects' configuration, without calling `.apply()`.
