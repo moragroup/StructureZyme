@@ -24,11 +24,45 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-import pandas as pd  # noqa: F401  (kept for future execute() DataFrame usage)
+import pandas as pd
 
 from filterzyme.steps.step import Step
 
 logger = logging.getLogger(__name__)
+
+
+def _method_count(best_method) -> int:
+    """Count comma-separated methods in `best_method`. NaN/empty -> 0."""
+    if pd.isna(best_method) or best_method == "":
+        return 0
+    return len(str(best_method).split(","))
+
+
+def _select_one_per_entry(df: pd.DataFrame, entry_col: str = "Entry") -> pd.DataFrame:
+    """Reduce a per-(entry, docked_structure) DataFrame to exactly one row per entry.
+
+    Tie-break order:
+      1. Prefer rows where ``is_best == True`` (fall back to full group if none).
+      2. Among those, prefer highest ``_method_count(best_method)``.
+      3. Final tie-break: alphabetically smallest ``docked_structure``.
+
+    Returns a fresh DataFrame with the original columns (no ``_method_count`` leak)
+    and a reset index. Row order matches the first appearance of each entry in
+    the input (via ``groupby(..., sort=False)``).
+    """
+    rows = []
+    for _entry, group in df.groupby(entry_col, sort=False):
+        pool = group[group["is_best"] == True]  # noqa: E712 (explicit bool compare intentional; NaN-safe)
+        if pool.empty:
+            pool = group
+        pool = pool.copy()
+        pool["_method_count"] = pool["best_method"].apply(_method_count)
+        max_count = pool["_method_count"].max()
+        pool = pool[pool["_method_count"] == max_count]
+        pool = pool.sort_values("docked_structure")
+        rows.append(pool.iloc[0])
+    result = pd.DataFrame(rows).drop(columns=["_method_count"])
+    return result.reset_index(drop=True)
 
 
 def _count_ligands(pdb_path: Path | str, ligand_resname: str) -> int:

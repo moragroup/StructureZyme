@@ -9,9 +9,11 @@ covered in later tasks.
 """
 from __future__ import annotations
 
+import numpy as np
+import pandas as pd
 import pytest
 
-from filterzyme.steps.PLACER_step import PLACER, _count_ligands
+from filterzyme.steps.PLACER_step import PLACER, _count_ligands, _select_one_per_entry
 
 
 def _write_pdb(path, lines):
@@ -95,3 +97,58 @@ def test_placer_init_succeeds_with_existing_script(tmp_path):
     assert step.nsamples == 50  # default
     assert step.rerank == "prmsd"  # default
     assert (tmp_path / "placer_out").is_dir()  # output_dir was created
+
+
+# ---------------------------------------------------------------------------
+# Task 6: _select_one_per_entry (row-reduction for PLACER)
+# ---------------------------------------------------------------------------
+
+
+def test_select_one_per_entry_prefers_is_best():
+    df = pd.DataFrame({
+        "Entry": ["Q1", "Q1", "Q1", "Q2", "Q2", "Q2"],
+        "docked_structure": ["Q1_0_chai", "Q1_1_chai", "Q1_2_chai", "Q2_0_chai", "Q2_1_chai", "Q2_2_chai"],
+        "is_best": [False, True, False, False, False, True],
+        "best_method": [np.nan, "inter_tool_min_per_tool", np.nan, np.nan, np.nan, "inter_tool_min_per_tool"],
+    })
+    result = _select_one_per_entry(df, entry_col="Entry")
+    assert len(result) == 2
+    # Q1's picked row is "Q1_1_chai" (the is_best=True row)
+    assert set(result["docked_structure"]) == {"Q1_1_chai", "Q2_2_chai"}
+
+
+def test_select_one_per_entry_method_count_tiebreak():
+    df = pd.DataFrame({
+        "Entry": ["Q1", "Q1"],
+        "docked_structure": ["Q1_a_chai", "Q1_b_chai"],
+        "is_best": [True, True],
+        "best_method": ["inter_tool_min_per_tool", "inter_tool_min_per_tool,inter_tool_weighted_avg"],
+    })
+    result = _select_one_per_entry(df, entry_col="Entry")
+    assert len(result) == 1
+    assert result.iloc[0]["docked_structure"] == "Q1_b_chai"
+
+
+def test_select_one_per_entry_alphabetical_final_tiebreak():
+    df = pd.DataFrame({
+        "Entry": ["Q1", "Q1"],
+        "docked_structure": ["Q1_1_chai", "Q1_0_chai"],
+        "is_best": [True, True],
+        "best_method": ["inter_tool_min_per_tool", "inter_tool_weighted_avg"],
+    })
+    result = _select_one_per_entry(df, entry_col="Entry")
+    assert len(result) == 1
+    assert result.iloc[0]["docked_structure"] == "Q1_0_chai"
+
+
+def test_select_one_per_entry_fallback_when_no_is_best():
+    df = pd.DataFrame({
+        "Entry": ["Q1", "Q1", "Q1"],
+        "docked_structure": ["Q1_2_chai", "Q1_0_chai", "Q1_1_chai"],
+        "is_best": [False, False, False],
+        "best_method": [np.nan, np.nan, np.nan],
+    })
+    result = _select_one_per_entry(df, entry_col="Entry")
+    assert len(result) == 1
+    # Falls back to full pool; all have method_count=0 (NaN), tie-break is alphabetical
+    assert result.iloc[0]["docked_structure"] == "Q1_0_chai"
