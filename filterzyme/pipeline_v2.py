@@ -436,6 +436,11 @@ class Pipeline:
                 squidly_model_size: str = '3B',
                 squidly_as_threshold: float | None = None,
                 squidly_num_threads: int | None = None,
+                run_placer: bool = False,
+                placer_predict_ligand: str | None = None,
+                placer_nsamples: int = 50,
+                placer_rerank: str = "prmsd",
+                placer_conda_env: str = "placer_env",
                 ):
                  
         self.df = df.copy()
@@ -452,6 +457,15 @@ class Pipeline:
         self.squidly_model_size = squidly_model_size
         self.squidly_as_threshold = squidly_as_threshold
         self.squidly_num_threads = squidly_num_threads
+        self.run_placer = run_placer
+        self.placer_predict_ligand = placer_predict_ligand
+        self.placer_nsamples = placer_nsamples
+        self.placer_rerank = placer_rerank
+        self.placer_conda_env = placer_conda_env
+        if self.run_placer and self.placer_predict_ligand is None:
+            raise ValueError(
+                "run_placer=True requires placer_predict_ligand (e.g. 'A-HEM-154')"
+            )
         self.base_output_dir = Path(base_output_dir)
         self.base_output_dir.mkdir(exist_ok=True, parents=True)
 
@@ -493,3 +507,20 @@ class Pipeline:
             num_threads=self.num_threads,
         )
         gf.run()
+
+        # PLACER pose prediction (opt-in)
+        if self.run_placer:
+            from filterzyme.steps.PLACER_step import PLACER
+            geo_pkl = Path(self.base_output_dir) / "geometricfiltering" / "structural_features_final.pkl"
+            df_geo = pd.read_pickle(geo_pkl)
+            placer = PLACER(
+                preparedfiles_dir=Path(self.base_output_dir) / "superimposition" / "preparedfiles_for_superimposition",
+                output_dir=Path(self.base_output_dir) / "placer",
+                predict_ligand=self.placer_predict_ligand,
+                placer_conda_env=self.placer_conda_env,
+                nsamples=self.placer_nsamples,
+                rerank=self.placer_rerank,
+                num_threads=self.num_threads,
+            )
+            df_placer = placer.execute(df_geo)
+            df_placer.to_pickle(geo_pkl)
