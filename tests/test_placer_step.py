@@ -13,7 +13,13 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from filterzyme.steps.PLACER_step import PLACER, _count_ligands, _select_one_per_entry
+from filterzyme.steps.PLACER_step import (
+    PLACER,
+    _count_ligands,
+    _parse_placer_csv,
+    _placer_available,
+    _select_one_per_entry,
+)
 
 
 def _write_pdb(path, lines):
@@ -152,3 +158,304 @@ def test_select_one_per_entry_fallback_when_no_is_best():
     assert len(result) == 1
     # Falls back to full pool; all have method_count=0 (NaN), tie-break is alphabetical
     assert result.iloc[0]["docked_structure"] == "Q1_0_chai"
+
+
+# ---------------------------------------------------------------------------
+# Task 7.1: _build_pdb_path
+# ---------------------------------------------------------------------------
+
+from pathlib import Path
+
+
+def test_build_pdb_path(tmp_path):
+    fake_script = tmp_path / "fake_run_PLACER.py"
+    fake_script.touch()
+    step = PLACER(
+        preparedfiles_dir="/x/preparedfiles",
+        output_dir=tmp_path,
+        predict_ligand="LIG",
+        placer_script_path=str(fake_script),
+    )
+    row = pd.Series({"docked_structure": "Q97WW0_1_vina"})
+    assert step._build_pdb_path(row) == Path("/x/preparedfiles/Q97WW0_1_vina.pdb")
+
+
+# ---------------------------------------------------------------------------
+# Task 7.3: _build_cmd
+# ---------------------------------------------------------------------------
+
+
+def test_build_placer_cmd_single_ligand(tmp_path):
+    fake_script = tmp_path / "fake_run_PLACER.py"
+    fake_script.touch()
+    step = PLACER(
+        preparedfiles_dir=tmp_path,
+        output_dir=tmp_path / "out",
+        predict_ligand="LIG",
+        placer_script_path=str(fake_script),
+        placer_conda_env="placer_env",
+        nsamples=50,
+        rerank="prmsd",
+    )
+    cmd = step._build_cmd(Path("/x/foo.pdb"), n_ligands=1)
+    assert cmd == [
+        "conda", "run", "-n", "placer_env", "python",
+        str(fake_script),
+        "--ifile", "/x/foo.pdb",
+        "--odir", str(tmp_path / "out"),
+        "--rerank", "prmsd",
+        "-n", "50",
+        "--predict_ligand", "LIG",
+    ]
+
+
+def test_build_placer_cmd_multi_ligand(tmp_path):
+    fake_script = tmp_path / "fake_run_PLACER.py"
+    fake_script.touch()
+    step = PLACER(
+        preparedfiles_dir=tmp_path,
+        output_dir=tmp_path / "out",
+        predict_ligand="LIG",
+        placer_script_path=str(fake_script),
+    )
+    cmd = step._build_cmd(Path("/x/foo.pdb"), n_ligands=3)
+    # multi-ligand adds --predict_multi at the end
+    assert cmd[-1] == "--predict_multi"
+    # and everything before is the single-ligand form
+    assert cmd[:-1] == step._build_cmd(Path("/x/foo.pdb"), n_ligands=1)
+
+
+# ---------------------------------------------------------------------------
+# Task 7.5: _parse_placer_csv
+# ---------------------------------------------------------------------------
+
+
+def test_parse_placer_csv_success(tmp_path):
+    csv_path = tmp_path / "test.csv"
+    csv_path.write_text(
+        "label,model_idx,fape,lddt,rmsd,kabsch,prmsd,plddt,plddt_pde\n"
+        "s,1,1.54,0.956,0.365,0.196,0.681,0.975,0.927\n"
+        "s,2,1.87,0.941,0.539,0.161,1.621,0.952,0.801\n"
+        "s,3,2.16,0.904,4.469,0.428,3.753,0.564,0.685\n"
+    )
+    result = _parse_placer_csv(csv_path)
+    assert result == {
+        "placer_fape":      1.54,
+        "placer_lddt":      0.956,
+        "placer_rmsd":      0.365,
+        "placer_kabsch":    0.196,
+        "placer_prmsd":     0.681,
+        "placer_plddt":     0.975,
+        "placer_plddt_pde": 0.927,
+    }
+
+
+def test_parse_placer_csv_missing_file(tmp_path):
+    result = _parse_placer_csv(tmp_path / "does_not_exist.csv")
+    assert result == {
+        "placer_fape": None, "placer_lddt": None, "placer_rmsd": None,
+        "placer_kabsch": None, "placer_prmsd": None, "placer_plddt": None,
+        "placer_plddt_pde": None,
+    }
+
+
+def test_parse_placer_csv_malformed(tmp_path):
+    csv_path = tmp_path / "bad.csv"
+    csv_path.write_text("this,is,not,valid,placer,output\nfoo,bar,baz,qux,quux,corge\n")
+    result = _parse_placer_csv(csv_path)
+    # Missing columns → all None
+    assert all(v is None for v in result.values())
+
+
+# ---------------------------------------------------------------------------
+# Task 7.7: opt-in end-to-end smoke test (skipped by default)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(
+    not _placer_available(),
+    reason="Real PLACER run requires PLACER_SMOKE=1 + GPU + installed PLACER",
+)
+def test_execute_smoke(tmp_path):
+    """End-to-end PLACER invocation via subprocess. Opt-in only (PLACER_SMOKE=1).
+
+    Uses ``3rgk.pdb`` from the PLACER examples (HEM ligand in chain A resseq 154);
+    the brief mentioned ``dnHEM1.pdb`` but only ``dnHEM1_apo.pdb`` exists locally
+    (apo = no ligand, so unsuitable for PLACER). Override the ligand via
+    ``PLACER_SMOKE_LIGAND`` env var if needed.
+    """
+    import os
+    import shutil as _sh
+
+    prep = tmp_path / "preparedfiles"
+    prep.mkdir()
+    src = Path("/mnt/storage01/home/lherrmann/PLACER_tmp_clone/examples/inputs/3rgk.pdb")
+    dest = prep / "smoke_0_chai.pdb"
+    _sh.copyfile(src, dest)
+
+    ligand = os.environ.get("PLACER_SMOKE_LIGAND", "A-HEM-154")
+
+    df = pd.DataFrame({
+        "Entry": ["smoke"],
+        "docked_structure": ["smoke_0_chai"],
+        "is_best": [True],
+        "best_method": ["inter_tool_min_per_tool"],
+    })
+
+    step = PLACER(
+        preparedfiles_dir=prep,
+        output_dir=tmp_path / "placer_out",
+        predict_ligand=ligand,
+        nsamples=3,  # keep fast
+        rerank="prmsd",
+        # placer_script_path defaults correctly to ~/PLACER_tmp_clone/run_PLACER.py
+    )
+    result_df = step.execute(df)
+    assert len(result_df) == 1
+    row = result_df.iloc[0]
+    assert row["Entry"] == "smoke"
+    # At minimum, prmsd should be set (PLACER's main output metric)
+    assert row["placer_prmsd"] is not None and row["placer_prmsd"] > 0
+    assert row["placer_dir"] == str(tmp_path / "placer_out")
+
+
+# ---------------------------------------------------------------------------
+# Task 7.8: _validate_input + execute
+# ---------------------------------------------------------------------------
+
+
+def test_execute_missing_columns_raises(tmp_path):
+    fake_script = tmp_path / "fake_run_PLACER.py"
+    fake_script.touch()
+    step = PLACER(
+        preparedfiles_dir=tmp_path,
+        output_dir=tmp_path / "out",
+        predict_ligand="LIG",
+        placer_script_path=str(fake_script),
+    )
+    # DataFrame missing `is_best` and `best_method`
+    df = pd.DataFrame({"Entry": ["Q1"], "docked_structure": ["Q1_0_chai"]})
+    with pytest.raises(ValueError, match="missing required columns"):
+        step.execute(df)
+
+
+# ---------------------------------------------------------------------------
+# Task 7.9: mocked-subprocess behavior tests for execute()
+# ---------------------------------------------------------------------------
+
+
+def test_execute_per_entry_success_merges_csv(tmp_path, monkeypatch):
+    """execute() calls subprocess for each reduced entry and merges the CSV."""
+    import subprocess
+
+    fake_script = tmp_path / "fake_run_PLACER.py"
+    fake_script.touch()
+    prep = tmp_path / "preparedfiles"
+    prep.mkdir()
+    outdir = tmp_path / "placer_out"
+    # Real PDB file for _count_ligands to read (empty is fine, function returns 0)
+    (prep / "Q1_0_chai.pdb").touch()
+
+    step = PLACER(
+        preparedfiles_dir=prep,
+        output_dir=outdir,
+        predict_ligand="LIG",
+        placer_script_path=str(fake_script),
+    )
+
+    def fake_run(cmd, capture_output, text, check):
+        # Write a fake CSV where PLACER would
+        csv_path = outdir / "Q1_0_chai.csv"
+        csv_path.write_text(
+            "label,model_idx,fape,lddt,rmsd,kabsch,prmsd,plddt,plddt_pde\n"
+            "Q1_0_chai,1,1.5,0.95,0.4,0.2,0.7,0.98,0.93\n"
+        )
+        return subprocess.CompletedProcess(cmd, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    df = pd.DataFrame({
+        "Entry": ["Q1"],
+        "docked_structure": ["Q1_0_chai"],
+        "is_best": [True],
+        "best_method": ["inter_tool_min_per_tool"],
+    })
+    result = step.execute(df)
+    assert len(result) == 1
+    row = result.iloc[0]
+    assert row["placer_prmsd"] == 0.7
+    assert row["placer_plddt"] == 0.98
+    assert row["placer_dir"] == str(outdir)
+
+
+def test_execute_subprocess_failure_sets_none(tmp_path, monkeypatch):
+    """A failed subprocess → all 8 placer_* columns None; no exception raised."""
+    import subprocess
+
+    fake_script = tmp_path / "fake_run_PLACER.py"
+    fake_script.touch()
+    prep = tmp_path / "preparedfiles"
+    prep.mkdir()
+    (prep / "Q1_0_chai.pdb").touch()
+
+    step = PLACER(
+        preparedfiles_dir=prep,
+        output_dir=tmp_path / "placer_out",
+        predict_ligand="LIG",
+        placer_script_path=str(fake_script),
+    )
+
+    def fake_run_fail(cmd, capture_output, text, check):
+        return subprocess.CompletedProcess(cmd, returncode=1, stdout="", stderr="some error")
+
+    monkeypatch.setattr(subprocess, "run", fake_run_fail)
+
+    df = pd.DataFrame({
+        "Entry": ["Q1"],
+        "docked_structure": ["Q1_0_chai"],
+        "is_best": [True],
+        "best_method": ["inter_tool_min_per_tool"],
+    })
+    result = step.execute(df)  # must not raise
+    row = result.iloc[0]
+    assert row["placer_prmsd"] is None
+    assert row["placer_plddt"] is None
+    assert row["placer_dir"] is None
+
+
+def test_execute_missing_pdb_skips_entry(tmp_path, monkeypatch):
+    """If the docked PDB doesn't exist in preparedfiles_dir, log+skip that entry."""
+    import subprocess
+
+    fake_script = tmp_path / "fake_run_PLACER.py"
+    fake_script.touch()
+    prep = tmp_path / "preparedfiles"
+    prep.mkdir()
+    # Note: NOT creating any .pdb file
+
+    step = PLACER(
+        preparedfiles_dir=prep,
+        output_dir=tmp_path / "placer_out",
+        predict_ligand="LIG",
+        placer_script_path=str(fake_script),
+    )
+
+    called = []
+
+    def fake_run_should_not_be_called(*a, **kw):
+        called.append(True)
+        raise RuntimeError("subprocess.run should not have been called")
+
+    monkeypatch.setattr(subprocess, "run", fake_run_should_not_be_called)
+
+    df = pd.DataFrame({
+        "Entry": ["Q1"],
+        "docked_structure": ["MISSING_0_chai"],
+        "is_best": [True],
+        "best_method": ["inter_tool_min_per_tool"],
+    })
+    result = step.execute(df)
+    assert len(called) == 0  # subprocess not called
+    row = result.iloc[0]
+    assert row["placer_prmsd"] is None
+    assert row["placer_dir"] is None

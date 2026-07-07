@@ -65,6 +65,56 @@ def _select_one_per_entry(df: pd.DataFrame, entry_col: str = "Entry") -> pd.Data
     return result.reset_index(drop=True)
 
 
+_PLACER_SCORE_COLS = (
+    "fape", "lddt", "rmsd", "kabsch", "prmsd", "plddt", "plddt_pde",
+)
+
+
+def _placer_available() -> bool:
+    """True iff the real PLACER binary + placer_env are reachable AND smoke tests opted in.
+
+    Smoke tests require:
+      1. Env var ``PLACER_SMOKE=1`` (opt-in — smoke test uses GPU-time; keep default suite fast)
+      2. ``~/PLACER_tmp_clone/run_PLACER.py`` exists (Task 5 default path)
+      3. ``conda`` binary in PATH (needed to invoke via ``conda run -n placer_env``)
+    """
+    import os
+    import shutil
+    if os.environ.get("PLACER_SMOKE") != "1":
+        return False
+    script = Path("/mnt/storage01/home/lherrmann/PLACER_tmp_clone/run_PLACER.py")
+    return script.exists() and shutil.which("conda") is not None
+
+
+def _parse_placer_csv(csv_path: Path | str) -> dict[str, float | None]:
+    """Parse a PLACER output CSV and return the top-row scores as a dict.
+
+    PLACER writes rows pre-sorted by its ``--rerank`` metric, so ``iloc[0]`` is
+    the best sample. Returns 7 ``placer_*`` keys, all ``None`` if the file is
+    missing or malformed. Never raises.
+    """
+    empty = {f"placer_{c}": None for c in _PLACER_SCORE_COLS}
+    csv_path = Path(csv_path)
+    if not csv_path.exists():
+        return empty
+    try:
+        df = pd.read_csv(csv_path)
+        if len(df) == 0:
+            return empty
+        row = df.iloc[0]
+        result: dict[str, float | None] = {}
+        for col in _PLACER_SCORE_COLS:
+            if col in df.columns:
+                val = row[col]
+                result[f"placer_{col}"] = float(val) if pd.notna(val) else None
+            else:
+                result[f"placer_{col}"] = None
+        return result
+    except Exception as e:
+        logger.warning("Failed to parse PLACER CSV %s: %s", csv_path, e)
+        return empty
+
+
 def _count_ligands(pdb_path: Path | str, ligand_resname: str) -> int:
     """Count distinct ligand instances (unique chain + resseq) in a PDB file.
 
@@ -128,3 +178,125 @@ class PLACER(Step):
         self.placer_script_path = script
 
         self.output_dir.mkdir(parents=True, exist_ok=True)
+
+    def _build_pdb_path(self, row: pd.Series) -> Path:
+        """Return the .pdb path in preparedfiles_dir corresponding to a DataFrame row.
+
+        Mirrors GeneralGeometricFiltering's convention
+        (geometric_filtering_cofactor_MCS.py:466).
+        """
+        return self.preparedfiles_dir / f"{row[self.structure_col]}.pdb"
+
+    def _build_cmd(self, pdb_path: Path, n_ligands: int) -> list[str]:
+        """Build the full argv for a single PLACER invocation.
+
+        Multi-ligand adds ``--predict_multi``; single-ligand does not (spec 386-389).
+        """
+        cmd = [
+            "conda", "run", "-n", self.placer_conda_env, "python",
+            str(self.placer_script_path),
+            "--ifile", str(pdb_path),
+            "--odir", str(self.output_dir),
+            "--rerank", self.rerank,
+            "-n", str(self.nsamples),
+            "--predict_ligand", self.predict_ligand,
+        ]
+        if n_ligands > 1:
+            cmd.append("--predict_multi")
+        return cmd
+
+    def _validate_input(self, df: pd.DataFrame) -> None:
+        # Entry column name is configurable; check the configured name plus the rest
+        required = {self.entry_col, self.structure_col, "is_best", "best_method"}
+        missing = required - set(df.columns)
+        if missing:
+            raise ValueError(
+                f"PLACER.execute: input DataFrame missing required columns: {sorted(missing)}"
+            )
+
+    def execute(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Run PLACER once per entry and merge the top-row scores back.
+
+        Per-entry failures are logged and produce ``None`` for all 8 new columns;
+        never raises out of ``execute()`` (spec Behavior step 8).
+        """
+        import subprocess
+
+        self._validate_input(df)
+        reduced = _select_one_per_entry(df, entry_col=self.entry_col)
+
+        new_cols: dict[str, list] = {f"placer_{c}": [] for c in _PLACER_SCORE_COLS}
+        new_cols["placer_dir"] = []
+
+        for _idx, row in reduced.iterrows():
+            entry = row[self.entry_col]
+            pdb_path = self._build_pdb_path(row)
+            empty = {f"placer_{c}": None for c in _PLACER_SCORE_COLS}
+            empty["placer_dir"] = None
+
+            if not pdb_path.exists():
+                logger.warning(
+                    "PLACER: PDB not found for entry %s: %s. Skipping.", entry, pdb_path
+                )
+                for k, v in empty.items():
+                    new_cols[k].append(v)
+                continue
+
+            n_ligands = _count_ligands(pdb_path, self.predict_ligand)
+            cmd = self._build_cmd(pdb_path, n_ligands)
+
+            try:
+                result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+                # Retry as single-ligand if multi-ligand crashed with AssertionError
+                # (mirrors old PLACER_forChai_step.py:150-158 fallback)
+                if (
+                    result.returncode != 0
+                    and "AssertionError" in result.stderr
+                    and n_ligands > 1
+                ):
+                    logger.info(
+                        "PLACER: multi-ligand failed for %s; retrying single-ligand.",
+                        entry,
+                    )
+                    cmd = self._build_cmd(pdb_path, n_ligands=1)
+                    result = subprocess.run(
+                        cmd, capture_output=True, text=True, check=False
+                    )
+                if result.returncode != 0:
+                    logger.error(
+                        "PLACER: subprocess failed for entry %s (rc=%d): %s",
+                        entry, result.returncode, result.stderr[-500:],
+                    )
+                    for k, v in empty.items():
+                        new_cols[k].append(v)
+                    continue
+
+                # Find output CSV. PLACER names it <label>.csv where <label> is
+                # derived from input stem + optional --suffix. We didn't pass
+                # --suffix, so glob for <stem>*.csv.
+                csvs = list(Path(self.output_dir).glob(f"{pdb_path.stem}*.csv"))
+                if not csvs:
+                    logger.error(
+                        "PLACER: no output CSV for entry %s at %s",
+                        entry, self.output_dir,
+                    )
+                    for k, v in empty.items():
+                        new_cols[k].append(v)
+                    continue
+
+                scores = _parse_placer_csv(csvs[0])
+                for k in [f"placer_{c}" for c in _PLACER_SCORE_COLS]:
+                    new_cols[k].append(scores[k])
+                new_cols["placer_dir"].append(str(self.output_dir))
+            except Exception as e:
+                logger.exception(
+                    "PLACER: unexpected error for entry %s: %s", entry, e
+                )
+                for k, v in empty.items():
+                    new_cols[k].append(v)
+
+        # Merge into reduced DataFrame
+        out = reduced.reset_index(drop=True).copy()
+        for k, v in new_cols.items():
+            out[k] = v
+        return out
