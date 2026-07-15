@@ -1,4 +1,5 @@
-"""FastRelax step: pure ranking/selection logic (no PyRosetta dependency).
+"""FastRelax step: rank docked poses per engine and relax the top-K via
+Rosetta's FastRelax mover.
 
 Unlike the other per-engine prepare steps, `FastRelax` takes the three
 `*_files_for_superimposition` list-columns directly (its input is the
@@ -7,14 +8,15 @@ is inherently cross-column -- it needs to see Chai, Boltz, and Vina poses
 for the same entry together to apply per-engine top-K selection and
 rewrite each engine's list in place.
 
-This module covers everything in the FastRelax step that has no PyRosetta
-dependency: column validation, per-engine top-K ranking (including the
-ascending/descending direction switch), and dict-key <-> file-path
-matching. The actual PyRosetta-dependent relax call (`_relax_one`,
-`execute`) is implemented in a later task.
+The pure-Python parts (column validation, per-engine top-K ranking, and
+dict-key <-> file-path matching) live at module scope and are always
+importable. The PyRosetta-dependent parts (`_relax_one`) import
+`pyrosetta` lazily inside the method so that `import filterzyme` does
+not require PyRosetta to be installed.
 """
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Literal
 
@@ -22,6 +24,26 @@ import pandas as pd
 
 from ..utils.helpers import valid_file_list
 from .step import Step
+
+logger = logging.getLogger(__name__)
+
+# Module-level guard: PyRosetta's `init()` is not safely re-entrant across
+# repeated calls in some versions. This flag ensures it runs at most once
+# per process, no matter how many `_relax_one` calls we make.
+_pyrosetta_initialized = False
+
+
+def _pyrosetta_available() -> bool:
+    """True if `pyrosetta` is importable in the current environment.
+
+    Mirrors `_squidly_cli_available` in `tests/test_squidly_step.py`:
+    used to gate smoke tests that require the actual Rosetta binary.
+    """
+    try:
+        import pyrosetta  # noqa: F401
+        return True
+    except Exception:
+        return False
 
 
 def _confidence_key_from_path(path: str, engine: str):
@@ -96,11 +118,14 @@ class FastRelax(Step):
     poses by its own confidence-dict column and sort direction, relaxes
     the top `top_k` poses per engine with PyRosetta's FastRelax mover, and
     rewrites each engine's file-path list in place with the relaxed paths
-    (see `_apply_relaxed_paths`).
+    (see `_apply_relaxed_paths`). Also attaches a `fastrelax_score`
+    dict column recording each relaxed pose's final Rosetta score,
+    keyed the same way as the engine's confidence dict.
 
-    The PyRosetta-dependent relax call (`_relax_one`, `execute`) is
-    implemented in a later task; this constructor and `_validate_input`/
-    `_rank_and_select` contain only pure Python logic.
+    Per-pose failures (Rosetta exception, missing/corrupt PDB, ...) are
+    logged and swallowed by `execute`; the pose's original path is left
+    in place and the run continues, matching the existing
+    per-entry-tolerant pattern used elsewhere in the pipeline.
     """
 
     def __init__(
@@ -151,6 +176,165 @@ class FastRelax(Step):
             raise ValueError(
                 f"FastRelax input DataFrame is missing required columns: {missing}"
             )
+
+    def _relax_one(self, pdb_path) -> tuple[str, float]:
+        """Relax one PDB with PyRosetta's FastRelax mover.
+
+        Returns `(relaxed_pdb_path, final_score)`. Raises on error --
+        `execute()` wraps calls in try/except so per-pose failures don't
+        abort the run.
+
+        `pyrosetta` is imported lazily inside this method so that
+        `import filterzyme` doesn't require PyRosetta. If the import
+        fails, a clear `RuntimeError` is raised pointing the user at
+        the shared installer location (per the spec's "Shared Software
+        Locations" section).
+        """
+        try:
+            import pyrosetta
+        except ImportError as e:
+            raise RuntimeError(
+                "PyRosetta is required for FastRelax; install it into the "
+                "current env (see /mnt/labs/data/mora/software/"
+                "RosettaFastRelax/ for the shared installer)."
+            ) from e
+
+        global _pyrosetta_initialized
+        try:
+            if not _pyrosetta_initialized:
+                pyrosetta.init(silent=True)
+                _pyrosetta_initialized = True
+
+            pose = pyrosetta.pose_from_pdb(str(pdb_path))
+
+            movemap = None
+            movemap_factory = None
+            if self.mode == "ligand_focused":
+                from pyrosetta.rosetta.core.select.residue_selector import (
+                    NeighborhoodResidueSelector,
+                    ResidueNameSelector,
+                )
+                from pyrosetta.rosetta.core.select.movemap import (
+                    MoveMapFactory,
+                    move_map_action,
+                )
+                from pyrosetta.rosetta.protocols.constraint_generator import (
+                    AddConstraints,
+                    CoordinateConstraintGenerator,
+                )
+
+                ligand_sel = ResidueNameSelector()
+                ligand_sel.set_residue_name3(self.ligand_resname)
+                shell_sel = NeighborhoodResidueSelector(
+                    ligand_sel, self.shell_radius, True
+                )
+
+                movemap_factory = MoveMapFactory()
+                movemap_factory.all_bb(False)
+                movemap_factory.all_chi(False)
+                movemap_factory.add_bb_action(move_map_action.mm_enable, shell_sel)
+                movemap_factory.add_chi_action(move_map_action.mm_enable, shell_sel)
+
+                coord_gen = CoordinateConstraintGenerator()
+                coord_gen.set_residue_selector(shell_sel)
+                coord_gen.set_sd(1.0 / max(self.constraint_weight, 1e-6))
+                add_csts = AddConstraints()
+                add_csts.add_generator(coord_gen)
+                add_csts.apply(pose)
+            elif self.mode == "full":
+                movemap = pyrosetta.MoveMap()
+                movemap.set_bb(True)
+                movemap.set_chi(True)
+            else:
+                raise ValueError(f"Unknown FastRelax mode: {self.mode!r}")
+
+            scorefxn = pyrosetta.create_score_function(self.scorefunction)
+            if self.mode == "ligand_focused":
+                from pyrosetta.rosetta.core.scoring import ScoreType
+                scorefxn.set_weight(
+                    ScoreType.coordinate_constraint, self.constraint_weight
+                )
+
+            relax = pyrosetta.rosetta.protocols.relax.FastRelax(scorefxn)
+            if movemap_factory is not None:
+                relax.set_movemap_factory(movemap_factory)
+            elif movemap is not None:
+                relax.set_movemap(movemap)
+            relax.apply(pose)
+
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+            relaxed_path = self.output_dir / f"{Path(pdb_path).stem}_relaxed.pdb"
+            pose.dump_pdb(str(relaxed_path))
+
+            return (str(relaxed_path), float(scorefxn(pose)))
+        except Exception as e:
+            logger.error("FastRelax._relax_one failed for %s: %s", pdb_path, e)
+            raise
+
+    def execute(self, df: pd.DataFrame) -> pd.DataFrame:
+        self._validate_input(df)
+
+        # Per-row selection: build a dict[engine, list[selected_paths]]
+        # for each row. This step is pyrosetta-independent and lets us
+        # validate + shape the work before touching Rosetta.
+        per_row_selected: list[dict] = [
+            self._rank_and_select(row) for _, row in df.iterrows()
+        ]
+
+        engine_specs = (
+            ("chai", self.chai_files_col),
+            ("boltz", self.boltz_files_col),
+            ("vina", self.vina_files_col),
+        )
+
+        df = df.copy()
+        # Make the files-columns object-typed so we can assign list values
+        # cleanly, and allocate the fastrelax_score column.
+        for _, files_col in engine_specs:
+            df[files_col] = df[files_col].astype(object)
+        df["fastrelax_score"] = [{} for _ in range(len(df))]
+
+        for row_idx, (df_idx, row) in enumerate(df.iterrows()):
+            selected = per_row_selected[row_idx]
+            fastrelax_score: dict = {"chai": {}, "boltz": {}, "vina": {}}
+
+            for engine, files_col in engine_specs:
+                selected_paths = selected.get(engine, [])
+                relaxed_map: dict = {}
+                for path in selected_paths:
+                    try:
+                        relaxed_path, score = self._relax_one(path)
+                    except Exception as e:
+                        logger.error(
+                            "FastRelax: skipping pose %s for engine %s: %s",
+                            path,
+                            engine,
+                            e,
+                        )
+                        # Leave the original path in place -- see spec
+                        # Behavior step 6. No entry in `relaxed_map` for
+                        # this path, so `_apply_relaxed_paths` falls back
+                        # to the original.
+                        continue
+                    relaxed_map[path] = relaxed_path
+                    key = _confidence_key_from_path(path, engine)
+                    fastrelax_score[engine][key] = score
+
+                original_files = row[files_col]
+                if not valid_file_list(original_files):
+                    # Nothing to rewrite for this engine on this row.
+                    continue
+                new_files = _apply_relaxed_paths(
+                    list(original_files),
+                    selected_paths,
+                    relaxed_map,
+                    self.drop_unrelaxed,
+                )
+                df.at[df_idx, files_col] = new_files
+
+            df.at[df_idx, "fastrelax_score"] = fastrelax_score
+
+        return df
 
     def _rank_and_select(self, row: pd.Series) -> dict:
         """Rank and select the top-K poses per engine for a single row.
