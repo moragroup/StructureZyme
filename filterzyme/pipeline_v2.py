@@ -440,7 +440,7 @@ class Pipeline:
                 placer_predict_ligand: str | None = None,
                 placer_nsamples: int = 50,
                 placer_rerank: str = "prmsd",
-                placer_conda_env: str = "placer_env",
+                placer_env_path: str = "/mnt/labs/data/mora/software/PLACER/env",
                 ):
                  
         self.df = df.copy()
@@ -461,7 +461,7 @@ class Pipeline:
         self.placer_predict_ligand = placer_predict_ligand
         self.placer_nsamples = placer_nsamples
         self.placer_rerank = placer_rerank
-        self.placer_conda_env = placer_conda_env
+        self.placer_env_path = placer_env_path
         if self.run_placer and self.placer_predict_ligand is None:
             raise ValueError(
                 "run_placer=True requires placer_predict_ligand (e.g. 'A-HEM-154')"
@@ -517,7 +517,7 @@ class Pipeline:
                 preparedfiles_dir=Path(self.base_output_dir) / "superimposition" / "preparedfiles_for_superimposition",
                 output_dir=Path(self.base_output_dir) / "placer",
                 predict_ligand=self.placer_predict_ligand,
-                placer_conda_env=self.placer_conda_env,
+                placer_env_path=self.placer_env_path,
                 nsamples=self.placer_nsamples,
                 rerank=self.placer_rerank,
                 num_threads=self.num_threads,

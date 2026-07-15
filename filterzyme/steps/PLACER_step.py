@@ -71,19 +71,19 @@ _PLACER_SCORE_COLS = (
 
 
 def _placer_available() -> bool:
-    """True iff the real PLACER binary + placer_env are reachable AND smoke tests opted in.
+    """True iff the shared PLACER install is reachable AND smoke tests opted in.
 
     Smoke tests require:
       1. Env var ``PLACER_SMOKE=1`` (opt-in — smoke test uses GPU-time; keep default suite fast)
-      2. ``~/PLACER_tmp_clone/run_PLACER.py`` exists (Task 5 default path)
-      3. ``conda`` binary in PATH (needed to invoke via ``conda run -n placer_env``)
+      2. ``/mnt/labs/data/mora/software/PLACER/run_PLACER.py`` exists
+      3. ``/mnt/labs/data/mora/software/PLACER/env/bin/python`` exists
     """
     import os
-    import shutil
     if os.environ.get("PLACER_SMOKE") != "1":
         return False
-    script = Path("/mnt/storage01/home/lherrmann/PLACER_tmp_clone/run_PLACER.py")
-    return script.exists() and shutil.which("conda") is not None
+    script = Path("/mnt/labs/data/mora/software/PLACER/run_PLACER.py")
+    python = Path("/mnt/labs/data/mora/software/PLACER/env/bin/python")
+    return script.exists() and python.exists()
 
 
 def _parse_placer_csv(csv_path: Path | str) -> dict[str, float | None]:
@@ -153,8 +153,8 @@ class PLACER(Step):
         predict_ligand: str,
         entry_col: str = "Entry",
         structure_col: str = "docked_structure",
-        placer_script_path: str = "/mnt/storage01/home/lherrmann/PLACER_tmp_clone/run_PLACER.py",
-        placer_conda_env: str = "placer_env",
+        placer_script_path: str = "/mnt/labs/data/mora/software/PLACER/run_PLACER.py",
+        placer_env_path: str = "/mnt/labs/data/mora/software/PLACER/env",
         nsamples: int = 50,
         rerank: str = "prmsd",
         num_threads: int = 1,
@@ -164,7 +164,6 @@ class PLACER(Step):
         self.predict_ligand = predict_ligand
         self.entry_col = entry_col
         self.structure_col = structure_col
-        self.placer_conda_env = placer_conda_env
         self.nsamples = nsamples
         self.rerank = rerank
         self.num_threads = num_threads
@@ -176,6 +175,14 @@ class PLACER(Step):
                 "Set placer_script_path explicitly or install PLACER."
             )
         self.placer_script_path = script
+
+        env_python = Path(placer_env_path) / "bin" / "python"
+        if not env_python.exists():
+            raise FileNotFoundError(
+                f"PLACER env python not found at {env_python}. "
+                "Set placer_env_path explicitly or install PLACER."
+            )
+        self.placer_env_python = env_python
 
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -193,7 +200,7 @@ class PLACER(Step):
         Multi-ligand adds ``--predict_multi``; single-ligand does not (spec 386-389).
         """
         cmd = [
-            "conda", "run", "-n", self.placer_conda_env, "python",
+            str(self.placer_env_python),
             str(self.placer_script_path),
             "--ifile", str(pdb_path),
             "--odir", str(self.output_dir),

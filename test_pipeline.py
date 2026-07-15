@@ -76,8 +76,8 @@ def test_pipeline_accepts_placer_kwargs():
     assert params["placer_nsamples"].default == 50
     assert "placer_rerank" in params
     assert params["placer_rerank"].default == "prmsd"
-    assert "placer_conda_env" in params
-    assert params["placer_conda_env"].default == "placer_env"
+    assert "placer_env_path" in params
+    assert params["placer_env_path"].default == "/mnt/labs/data/mora/software/PLACER/env"
 
 
 def test_pipeline_run_placer_without_ligand_raises():

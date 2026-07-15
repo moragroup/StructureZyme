@@ -31,6 +31,18 @@ def _write_pdb(path, lines):
             f.write(line)
 
 
+def _make_fake_env(tmp_path):
+    """Create a fake PLACER env layout (env/bin/python) under tmp_path.
+
+    Returns the env root path. Use with ``placer_env_path=str(env_root)``.
+    """
+    from pathlib import Path as _P
+    env_root = _P(tmp_path) / "fake_env"
+    (env_root / "bin").mkdir(parents=True, exist_ok=True)
+    (env_root / "bin" / "python").touch()
+    return env_root
+
+
 # Column layout of a PDB ATOM/HETATM record (1-indexed columns from the
 # PDB spec; 0-indexed slice ranges shown for clarity):
 #   cols 1-6    (0:6)    record name  ("HETATM" or "ATOM  ")
@@ -80,25 +92,43 @@ def test_count_ligands_missing_file(tmp_path):
 
 
 def test_placer_init_raises_on_missing_script(tmp_path):
+    env_root = _make_fake_env(tmp_path)
     with pytest.raises(FileNotFoundError, match="PLACER script not found"):
         PLACER(
             preparedfiles_dir=tmp_path,
             output_dir=tmp_path,
             predict_ligand="LIG",
             placer_script_path="/nonexistent/run_PLACER.py",
+            placer_env_path=str(env_root),
+        )
+
+
+def test_placer_init_raises_on_missing_env(tmp_path):
+    fake_script = tmp_path / "fake_run_PLACER.py"
+    fake_script.touch()
+    with pytest.raises(FileNotFoundError, match="PLACER env python not found"):
+        PLACER(
+            preparedfiles_dir=tmp_path,
+            output_dir=tmp_path,
+            predict_ligand="LIG",
+            placer_script_path=str(fake_script),
+            placer_env_path="/nonexistent/env",
         )
 
 
 def test_placer_init_succeeds_with_existing_script(tmp_path):
     fake_script = tmp_path / "fake_run_PLACER.py"
     fake_script.touch()
+    env_root = _make_fake_env(tmp_path)
     step = PLACER(
         preparedfiles_dir=tmp_path,
         output_dir=tmp_path / "placer_out",
         predict_ligand="LIG",
         placer_script_path=str(fake_script),
+        placer_env_path=str(env_root),
     )
     assert step.placer_script_path == fake_script
+    assert step.placer_env_python == env_root / "bin" / "python"
     assert step.predict_ligand == "LIG"
     assert step.nsamples == 50  # default
     assert step.rerank == "prmsd"  # default
@@ -170,11 +200,13 @@ from pathlib import Path
 def test_build_pdb_path(tmp_path):
     fake_script = tmp_path / "fake_run_PLACER.py"
     fake_script.touch()
+    env_root = _make_fake_env(tmp_path)
     step = PLACER(
         preparedfiles_dir="/x/preparedfiles",
         output_dir=tmp_path,
         predict_ligand="LIG",
         placer_script_path=str(fake_script),
+        placer_env_path=str(env_root),
     )
     row = pd.Series({"docked_structure": "Q97WW0_1_vina"})
     assert step._build_pdb_path(row) == Path("/x/preparedfiles/Q97WW0_1_vina.pdb")
@@ -188,18 +220,19 @@ def test_build_pdb_path(tmp_path):
 def test_build_placer_cmd_single_ligand(tmp_path):
     fake_script = tmp_path / "fake_run_PLACER.py"
     fake_script.touch()
+    env_root = _make_fake_env(tmp_path)
     step = PLACER(
         preparedfiles_dir=tmp_path,
         output_dir=tmp_path / "out",
         predict_ligand="LIG",
         placer_script_path=str(fake_script),
-        placer_conda_env="placer_env",
+        placer_env_path=str(env_root),
         nsamples=50,
         rerank="prmsd",
     )
     cmd = step._build_cmd(Path("/x/foo.pdb"), n_ligands=1)
     assert cmd == [
-        "conda", "run", "-n", "placer_env", "python",
+        str(env_root / "bin" / "python"),
         str(fake_script),
         "--ifile", "/x/foo.pdb",
         "--odir", str(tmp_path / "out"),
@@ -212,11 +245,13 @@ def test_build_placer_cmd_single_ligand(tmp_path):
 def test_build_placer_cmd_multi_ligand(tmp_path):
     fake_script = tmp_path / "fake_run_PLACER.py"
     fake_script.touch()
+    env_root = _make_fake_env(tmp_path)
     step = PLACER(
         preparedfiles_dir=tmp_path,
         output_dir=tmp_path / "out",
         predict_ligand="LIG",
         placer_script_path=str(fake_script),
+        placer_env_path=str(env_root),
     )
     cmd = step._build_cmd(Path("/x/foo.pdb"), n_ligands=3)
     # multi-ligand adds --predict_multi at the end
@@ -279,21 +314,27 @@ def test_parse_placer_csv_malformed(tmp_path):
 def test_execute_smoke(tmp_path):
     """End-to-end PLACER invocation via subprocess. Opt-in only (PLACER_SMOKE=1).
 
-    Uses ``3rgk.pdb`` from the PLACER examples (HEM ligand in chain A resseq 154);
-    the brief mentioned ``dnHEM1.pdb`` but only ``dnHEM1_apo.pdb`` exists locally
-    (apo = no ligand, so unsuitable for PLACER). Override the ligand via
-    ``PLACER_SMOKE_LIGAND`` env var if needed.
+    Uses ``dnHEM1.pdb`` from the PLACER examples (HEM ligand in chain B, resseq 213),
+    which is PLACER's own reference command-line example (see
+    ``examples/commandline_examples.sh`` line 13). The ligand chain B is
+    distinct from the protein chain A, avoiding the "ligand chains already exist
+    in parsed protein chains" collision. Override the input file / ligand via
+    ``PLACER_SMOKE_PDB`` and ``PLACER_SMOKE_LIGAND`` env vars if needed.
     """
     import os
     import shutil as _sh
 
     prep = tmp_path / "preparedfiles"
     prep.mkdir()
-    src = Path("/mnt/storage01/home/lherrmann/PLACER_tmp_clone/examples/inputs/3rgk.pdb")
+    pdb_name = os.environ.get(
+        "PLACER_SMOKE_PDB",
+        "/mnt/labs/data/mora/software/PLACER/examples/inputs/dnHEM1.pdb",
+    )
+    src = Path(pdb_name)
     dest = prep / "smoke_0_chai.pdb"
     _sh.copyfile(src, dest)
 
-    ligand = os.environ.get("PLACER_SMOKE_LIGAND", "A-HEM-154")
+    ligand = os.environ.get("PLACER_SMOKE_LIGAND", "B-HEM-213")
 
     df = pd.DataFrame({
         "Entry": ["smoke"],
@@ -308,7 +349,8 @@ def test_execute_smoke(tmp_path):
         predict_ligand=ligand,
         nsamples=3,  # keep fast
         rerank="prmsd",
-        # placer_script_path defaults correctly to ~/PLACER_tmp_clone/run_PLACER.py
+        # placer_script_path defaults to /mnt/labs/.../PLACER/run_PLACER.py
+        # placer_env_path defaults to   /mnt/labs/.../PLACER/env
     )
     result_df = step.execute(df)
     assert len(result_df) == 1
@@ -327,11 +369,13 @@ def test_execute_smoke(tmp_path):
 def test_execute_missing_columns_raises(tmp_path):
     fake_script = tmp_path / "fake_run_PLACER.py"
     fake_script.touch()
+    env_root = _make_fake_env(tmp_path)
     step = PLACER(
         preparedfiles_dir=tmp_path,
         output_dir=tmp_path / "out",
         predict_ligand="LIG",
         placer_script_path=str(fake_script),
+        placer_env_path=str(env_root),
     )
     # DataFrame missing `is_best` and `best_method`
     df = pd.DataFrame({"Entry": ["Q1"], "docked_structure": ["Q1_0_chai"]})
@@ -356,11 +400,13 @@ def test_execute_per_entry_success_merges_csv(tmp_path, monkeypatch):
     # Real PDB file for _count_ligands to read (empty is fine, function returns 0)
     (prep / "Q1_0_chai.pdb").touch()
 
+    env_root = _make_fake_env(tmp_path)
     step = PLACER(
         preparedfiles_dir=prep,
         output_dir=outdir,
         predict_ligand="LIG",
         placer_script_path=str(fake_script),
+        placer_env_path=str(env_root),
     )
 
     def fake_run(cmd, capture_output, text, check):
@@ -398,11 +444,13 @@ def test_execute_subprocess_failure_sets_none(tmp_path, monkeypatch):
     prep.mkdir()
     (prep / "Q1_0_chai.pdb").touch()
 
+    env_root = _make_fake_env(tmp_path)
     step = PLACER(
         preparedfiles_dir=prep,
         output_dir=tmp_path / "placer_out",
         predict_ligand="LIG",
         placer_script_path=str(fake_script),
+        placer_env_path=str(env_root),
     )
 
     def fake_run_fail(cmd, capture_output, text, check):
@@ -433,11 +481,13 @@ def test_execute_missing_pdb_skips_entry(tmp_path, monkeypatch):
     prep.mkdir()
     # Note: NOT creating any .pdb file
 
+    env_root = _make_fake_env(tmp_path)
     step = PLACER(
         preparedfiles_dir=prep,
         output_dir=tmp_path / "placer_out",
         predict_ligand="LIG",
         placer_script_path=str(fake_script),
+        placer_env_path=str(env_root),
     )
 
     called = []
