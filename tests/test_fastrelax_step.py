@@ -1,11 +1,11 @@
 """Tests for `filterzyme.steps.fastrelax_step`.
 
-Covers only the PyRosetta-independent logic of the `FastRelax` step:
-dict-key extraction from file paths, per-engine top-K pose ranking
-(descending for chai/boltz confidence scores, ascending for vina
-affinities), column validation, per-row rank-and-select, and rewriting
-file-path lists after relaxation. The actual PyRosetta `.apply()` call
-is implemented in a later task and is not exercised here.
+Covers the ranking/selection logic of the `FastRelax` step (dict-key
+extraction from file paths, per-engine top-K pose ranking, column
+validation, per-row rank-and-select, file-path list rewriting), plus
+the wiring of `execute()`. A single pyrosetta-gated smoke test also
+exercises `_relax_one` end-to-end against a real PDB fixture; it skips
+cleanly when `pyrosetta` isn't importable.
 """
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ from filterzyme.steps.fastrelax_step import (
     FastRelax,
     _apply_relaxed_paths,
     _confidence_key_from_path,
+    _pyrosetta_available,
     _select_top_k,
 )
 
@@ -145,3 +146,122 @@ def test_drop_unrelaxed_false():
         "/x/E_2_chai.pdb",
     }
     assert len(result) == 3
+
+
+# --- FastRelax.execute (missing column) --------------------------------------
+
+
+def test_execute_missing_column_raises(tmp_path):
+    """`execute()` must raise ValueError when a required column is absent,
+    reusing `_validate_input`. This exercises only the top of `execute()`
+    and needs no pyrosetta.
+    """
+    fr = FastRelax(output_dir=str(tmp_path), ligand_resname="LIG")
+    df = pd.DataFrame(
+        {
+            "Entry": ["a"],
+            # chai_files_for_superimposition intentionally missing
+            "boltz_files_for_superimposition": [["/x/a_model_0_boltz.pdb"]],
+            "vina_files_for_superimposition": [["/x/a_1_vina.pdb"]],
+        }
+    )
+    with pytest.raises(ValueError, match="missing required columns"):
+        fr.execute(df)
+
+
+# --- FastRelax._relax_one (pyrosetta-gated smoke test) -----------------------
+
+
+# Real protein + HEM ligand fixture (3rgk, chain A, resnum 154). Uses
+# standard PDB atom names that Rosetta's built-in HEM params understand.
+# Used only by the gated smoke test below; other tests use tiny synthetic
+# data.
+_HEM_PDB_FIXTURE = Path("/mnt/labs/data/mora/software/PLACER/examples/inputs/3rgk.pdb")
+
+
+@pytest.mark.skipif(
+    not _pyrosetta_available(),
+    reason="pyrosetta is not importable in this environment",
+)
+def test_relax_one_smoke(tmp_path):
+    """End-to-end smoke test of `_relax_one`: relax a real HEM-bound PDB
+    and check that a relaxed PDB is written to disk and a numeric score
+    is returned.
+    """
+    if not _HEM_PDB_FIXTURE.exists():
+        pytest.skip(f"HEM PDB fixture not present at {_HEM_PDB_FIXTURE}")
+
+    fr = FastRelax(
+        output_dir=str(tmp_path),
+        ligand_resname="HEM",
+        mode="ligand_focused",
+        shell_radius=8.0,
+    )
+    relaxed_path, score = fr._relax_one(str(_HEM_PDB_FIXTURE))
+
+    assert Path(relaxed_path).exists()
+    assert isinstance(score, float)
+
+
+# --- FastRelax.execute (per-pose failure tolerance) --------------------------
+
+
+def test_execute_relax_failure_keeps_original_path(tmp_path, monkeypatch):
+    """When `_relax_one` raises for a pose, `execute()` must log and
+    continue -- never abort the run -- and leave the pose's original
+    path in the files-column (see spec Behavior step 6).
+    """
+    fr = FastRelax(
+        output_dir=str(tmp_path),
+        ligand_resname="LIG",
+        top_k=1,
+        drop_unrelaxed=False,  # so unselected paths are preserved too
+    )
+
+    # Track that `_relax_one` was actually invoked (and always failed),
+    # so we know we exercised `execute()`'s per-pose try/except and not
+    # just some upstream filter.
+    calls: list[str] = []
+
+    def _always_fail(self, pdb_path):
+        calls.append(str(pdb_path))
+        raise RuntimeError("simulated relax failure")
+
+    monkeypatch.setattr(FastRelax, "_relax_one", _always_fail)
+
+    # Use real (touched) files -- `_rank_and_select` guards via
+    # `valid_file_list`, which requires paths to actually exist on disk.
+    chai_files = [str(tmp_path / "E_0_chai.pdb"), str(tmp_path / "E_1_chai.pdb")]
+    boltz_files = [str(tmp_path / "E_model_0_boltz.pdb")]
+    vina_files = [str(tmp_path / "E_1_vina.pdb")]
+    for f in chai_files + boltz_files + vina_files:
+        Path(f).touch()
+
+    df = pd.DataFrame(
+        {
+            "Entry": ["E"],
+            "chai_files_for_superimposition": [chai_files],
+            "boltz_files_for_superimposition": [boltz_files],
+            "vina_files_for_superimposition": [vina_files],
+            "chai_ptm": [{"E_0": 0.5, "E_1": 0.9}],
+            "boltz2_confidence_score": [{"E_model_0": 0.8}],
+            "vina_affinities": [{1: -4.0}],
+        }
+    )
+
+    # Must not raise -- per-pose failures are logged and swallowed.
+    out = fr.execute(df)
+
+    # Sanity: _relax_one was actually invoked (top-1 per engine = 3 calls).
+    assert len(calls) == 3
+
+    # Original paths preserved (relaxation failed for the selected pose;
+    # unselected preserved because drop_unrelaxed=False).
+    assert set(out.iloc[0]["chai_files_for_superimposition"]) == set(chai_files)
+    assert set(out.iloc[0]["boltz_files_for_superimposition"]) == set(boltz_files)
+    assert set(out.iloc[0]["vina_files_for_superimposition"]) == set(vina_files)
+
+    # fastrelax_score column exists but is empty for all engines (all
+    # relax calls failed).
+    score = out.iloc[0]["fastrelax_score"]
+    assert score == {"chai": {}, "boltz": {}, "vina": {}}
