@@ -477,6 +477,14 @@ class Pipeline:
                 placer_nsamples: int = 50,
                 placer_rerank: str = "prmsd",
                 placer_env_path: str = "/mnt/labs/data/mora/software/PLACER/env",
+                run_fastrelax: bool = False,
+                fastrelax_mode: str = "ligand_focused",
+                fastrelax_top_k: int = 2,
+                fastrelax_drop_unrelaxed: bool = True,
+                fastrelax_shell_radius: float = 8.0,
+                fastrelax_constraint_weight: float = 1.0,
+                fastrelax_scorefunction: str = "ref2015",
+                ligand_resname: str = "LIG",
                 ):
                  
         self.df = df.copy()
@@ -498,6 +506,14 @@ class Pipeline:
         self.placer_nsamples = placer_nsamples
         self.placer_rerank = placer_rerank
         self.placer_env_path = placer_env_path
+        self.run_fastrelax = run_fastrelax
+        self.fastrelax_mode = fastrelax_mode
+        self.fastrelax_top_k = fastrelax_top_k
+        self.fastrelax_drop_unrelaxed = fastrelax_drop_unrelaxed
+        self.fastrelax_shell_radius = fastrelax_shell_radius
+        self.fastrelax_constraint_weight = fastrelax_constraint_weight
+        self.fastrelax_scorefunction = fastrelax_scorefunction
+        self.ligand_resname = ligand_resname
         if self.run_placer and self.placer_predict_ligand is None:
             raise ValueError(
                 "run_placer=True requires placer_predict_ligand (e.g. 'A-HEM-154')"
@@ -531,6 +547,14 @@ class Pipeline:
             output_dir=Path(self.base_output_dir) / "superimposition",
             include_vina=self.run_vina,
             num_threads=self.num_threads,
+            run_fastrelax=self.run_fastrelax,
+            fastrelax_mode=self.fastrelax_mode,
+            fastrelax_top_k=self.fastrelax_top_k,
+            fastrelax_drop_unrelaxed=self.fastrelax_drop_unrelaxed,
+            fastrelax_shell_radius=self.fastrelax_shell_radius,
+            fastrelax_constraint_weight=self.fastrelax_constraint_weight,
+            fastrelax_scorefunction=self.fastrelax_scorefunction,
+            ligand_resname=self.ligand_resname,
         )
         superimp.run()  
 

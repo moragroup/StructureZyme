@@ -354,3 +354,81 @@ def test_run_fastrelax_constructs_fastrelax_step_correctly(tmp_path, monkeypatch
 
     mock_instance.execute.assert_called_once_with(df_prep)
     assert result is df_after
+
+
+def test_pipeline_accepts_fastrelax_kwargs():
+    """Pipeline.__init__ accepts the 8 fastrelax_* / ligand_resname kwargs
+    with correct defaults."""
+    from filterzyme.pipeline_v2 import Pipeline
+    import inspect
+    sig = inspect.signature(Pipeline.__init__)
+    params = sig.parameters
+    assert "run_fastrelax" in params
+    assert params["run_fastrelax"].default is False
+    assert "fastrelax_mode" in params
+    assert params["fastrelax_mode"].default == "ligand_focused"
+    assert "fastrelax_top_k" in params
+    assert params["fastrelax_top_k"].default == 2
+    assert "fastrelax_drop_unrelaxed" in params
+    assert params["fastrelax_drop_unrelaxed"].default is True
+    assert "fastrelax_shell_radius" in params
+    assert params["fastrelax_shell_radius"].default == 8.0
+    assert "fastrelax_constraint_weight" in params
+    assert params["fastrelax_constraint_weight"].default == 1.0
+    assert "fastrelax_scorefunction" in params
+    assert params["fastrelax_scorefunction"].default == "ref2015"
+    assert "ligand_resname" in params
+    assert params["ligand_resname"].default == "LIG"
+
+
+def test_pipeline_forwards_fastrelax_kwargs_to_superimposition(tmp_path, monkeypatch):
+    """Pipeline.run() must construct Superimposition with fastrelax_* and
+    ligand_resname kwargs threaded through from Pipeline's own attrs."""
+    from unittest.mock import MagicMock
+    import filterzyme.pipeline_v2 as pv2
+
+    df = pd.DataFrame({
+        "Entry": ["e1"],
+        "Sequence": ["MK"],
+        "substrate_smiles": ["CC"],
+        "substrate_name": ["x"],
+        "substrate_moiety": ["[C]"],
+    })
+
+    MockDocking = MagicMock()
+    MockDocking.return_value.run.return_value = None
+    MockSuperimposition = MagicMock()
+    MockSuperimposition.return_value.run.return_value = None
+    MockGeoFilters = MagicMock()
+    MockGeoFilters.return_value.run.return_value = None
+
+    monkeypatch.setattr(pv2, "Docking", MockDocking)
+    monkeypatch.setattr(pv2, "Superimposition", MockSuperimposition)
+    monkeypatch.setattr(pv2, "GeometricFilters", MockGeoFilters)
+    monkeypatch.setattr(pv2.pd, "read_pickle", lambda p: pd.DataFrame({"Entry": ["e1"]}))
+
+    pipeline = pv2.Pipeline(
+        df=df,
+        boltz_cache_dir=str(tmp_path / "boltz"),
+        base_output_dir=str(tmp_path / "out"),
+        run_fastrelax=True,
+        fastrelax_top_k=5,
+        fastrelax_mode="full",
+        fastrelax_drop_unrelaxed=False,
+        fastrelax_shell_radius=12.0,
+        fastrelax_constraint_weight=0.25,
+        fastrelax_scorefunction="beta_nov16",
+        ligand_resname="XYZ",
+    )
+    pipeline.run()
+
+    MockSuperimposition.assert_called_once()
+    _, kwargs = MockSuperimposition.call_args
+    assert kwargs["run_fastrelax"] is True
+    assert kwargs["fastrelax_top_k"] == 5
+    assert kwargs["fastrelax_mode"] == "full"
+    assert kwargs["fastrelax_drop_unrelaxed"] is False
+    assert kwargs["fastrelax_shell_radius"] == 12.0
+    assert kwargs["fastrelax_constraint_weight"] == 0.25
+    assert kwargs["fastrelax_scorefunction"] == "beta_nov16"
+    assert kwargs["ligand_resname"] == "XYZ"
