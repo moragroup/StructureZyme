@@ -24,6 +24,7 @@ from filterzyme.steps.geometric_filtering_esterase import EsteraseGeometricFilte
 from filterzyme.steps.fpocket_step import Fpocket
 from filterzyme.steps.ligandSASA_step import LigandSASA
 from filterzyme.steps.plip_step import PLIP
+from filterzyme.steps.fastrelax_step import FastRelax
 
 from enzymetk.dock_chai_step import Chai
 from enzymetk.dock_boltz_step import Boltz
@@ -270,19 +271,38 @@ class Docking:
 
 class Superimposition:
     def __init__(self, maxMatches, input_dir="pipeline_output", output_dir="pipeline_output",
-                 include_vina: bool = False, num_threads=1):
+                 include_vina: bool = False, num_threads=1,
+                 run_fastrelax: bool = False,
+                 fastrelax_mode: str = "ligand_focused",
+                 fastrelax_top_k: int = 2,
+                 fastrelax_drop_unrelaxed: bool = True,
+                 fastrelax_shell_radius: float = 8.0,
+                 fastrelax_constraint_weight: float = 1.0,
+                 fastrelax_scorefunction: str = "ref2015",
+                 ligand_resname: str = "LIG"):
         self.maxMatches = maxMatches
         self.include_vina = include_vina
         self.num_threads = num_threads
         self.input_dir = Path(input_dir)
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(exist_ok=True, parents=True)
+        self.run_fastrelax = run_fastrelax
+        self.fastrelax_mode = fastrelax_mode
+        self.fastrelax_top_k = fastrelax_top_k
+        self.fastrelax_drop_unrelaxed = fastrelax_drop_unrelaxed
+        self.fastrelax_shell_radius = fastrelax_shell_radius
+        self.fastrelax_constraint_weight = fastrelax_constraint_weight
+        self.fastrelax_scorefunction = fastrelax_scorefunction
+        self.ligand_resname = ligand_resname
 
     def run(self):
         
         log_section('Superimposition')
         log_subsection('Superimposing docked structures')
         df_prep = self._prepare_files_for_superimposition()
+        if self.run_fastrelax:
+            log_subsection('Relaxing top-ranked docked structures')
+            df_prep = self._run_fastrelax(df_prep)
         df_sup = self._superimposition(df_prep)
         log_subsection('Calculating protein RMSDs')
         df_proteinRMSD_all, df_proteinRMSD  = self._proteinRMSD(df_sup)
@@ -290,6 +310,22 @@ class Superimposition:
         df_ligandRMSD_all, df_ligandRMSD = self._ligandRMSD(df_proteinRMSD)
         return df_ligandRMSD
 
+
+    def _run_fastrelax(self, df_prep):
+        fastrelax_dir = Path(self.output_dir) / 'fastrelax'
+        fastrelax_dir.mkdir(exist_ok=True, parents=True)
+        step = FastRelax(
+            output_dir=fastrelax_dir,
+            mode=self.fastrelax_mode,
+            top_k=self.fastrelax_top_k,
+            drop_unrelaxed=self.fastrelax_drop_unrelaxed,
+            shell_radius=self.fastrelax_shell_radius,
+            constraint_weight=self.fastrelax_constraint_weight,
+            scorefunction=self.fastrelax_scorefunction,
+            ligand_resname=self.ligand_resname,
+            num_threads=self.num_threads,
+        )
+        return step.execute(df_prep)
 
     def _prepare_files_for_superimposition(self):
         df_metrics = pd.read_pickle(Path(self.input_dir) / 'dockingmetrics.pkl')
