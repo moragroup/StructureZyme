@@ -278,16 +278,16 @@ class LigandRMSD(Step):
 
         # Iterate through all subdirectories in the input directory
         for sub_dir in self.input_dir.iterdir():
-            print(f"Processing entry: {sub_dir.name}")
+            logger.info(f"Processing entry: {sub_dir.name}")
 
             # Get substrate_smiles for entry
             try:
                 substrate_smiles = df.loc[df[self.entry_col] == sub_dir.name, "substrate_smiles"].iloc[0]
                 if pd.isna(substrate_smiles) or str(substrate_smiles).strip() == "":
-                    print(f"[SKIP] substrate_smiles empty for {sub_dir.name}")
+                    logger.warning(f"[SKIP] substrate_smiles empty for {sub_dir.name}")
                     continue
             except IndexError:
-                print(f"[SKIP] No substrate_smiles found for {sub_dir.name}")
+                logger.warning(f"[SKIP] No substrate_smiles found for {sub_dir.name}")
                 continue
 
             # Process all PDB files in subdirectories
@@ -305,7 +305,7 @@ class LigandRMSD(Step):
                 filtered_ligands = closest_ligands_by_element_composition(ligands, substrate_smiles)
 
                 if len(filtered_ligands) > 2:
-                    print('More than 2 ligands were found matching the smile string.')
+                    logger.warning('More than 2 ligands were found matching the smile string.')
                     continue
 
                 if len(filtered_ligands) == 0:
@@ -316,7 +316,7 @@ class LigandRMSD(Step):
                 ligand2 = filtered_ligands[1]
 
                 if ligand1 is None or ligand2 is None:
-                    print(f"Could not extract both ligands, skipping {pdb_file_path}")
+                    logger.warning(f"Could not extract both ligands, skipping {pdb_file_path}")
                     continue
 
                 try:
@@ -332,19 +332,19 @@ class LigandRMSD(Step):
                         AllChem.EmbedMolecule(ligand2)
 
                 except Chem.rdchem.AtomValenceException as e:
-                    print(f"Valence error in {pdb_file_path.name}: {e}")
-                    print(Chem.MolToSmiles(ligand1))  # Just to check
-                    print(Chem.MolToSmiles(ligand2))  # Just to check
+                    logger.warning(f"Valence error in {pdb_file_path.name}: {e}")
+                    logger.debug(f"ligand1 SMILES: {Chem.MolToSmiles(ligand1)}")
+                    logger.debug(f"ligand2 SMILES: {Chem.MolToSmiles(ligand2)}")
                     continue  # skip this ligand pair
                 except Exception as e:
-                    print(f"Unexpected RDKit error in {pdb_file_path.name}: {e}")
+                    logger.error(f"Unexpected RDKit error in {pdb_file_path.name}: {e}")
                     continue
 
                 # Calculate ligandRMSD
                 try:
                     rmsd = rdMolAlign.CalcRMS(ligand1, ligand2, maxMatches=self.maxMatches)
                 except RuntimeError as e:
-                    print(f"LigandRMSD calculation failed for {pdb_file_path.name}: {e}")
+                    logger.warning(f"LigandRMSD calculation failed for {pdb_file_path.name}: {e}")
                     continue 
 
                 # Store the RMSD value in a dictionary
@@ -448,7 +448,7 @@ class LigandRMSD(Step):
             
             return rmsd_df, structures_df    
         except Exception as e:
-            print(f"Error selecting best docked structures: {e}")
+            logger.error(f"Error selecting best docked structures: {e}")
             return rmsd_df, pd.DataFrame()  # Return empty DataFrame on error
 
 
