@@ -30,7 +30,7 @@ if __name__ == "__main__":
         base_output_dir=base_output_dir, 
     )
 
-pipeline.run()
+    pipeline.run()
 
 """
     docking = Docking(
