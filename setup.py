@@ -21,12 +21,12 @@ setup(name='structurezyme',
       long_description_content_type='text/markdown',
       author='Helen Schmid',
       author_email='schmid.helen2@gmail.com',
-      url='https://github.com/HelenSchmid/Filterzyme',
+      url='https://github.com/moragroup/StructureZyme',
       license='GPL3',
       project_urls={
-          "Bug Tracker": "https://github.com/HelenSchmid/Filterzyme/issues",
-          "Documentation": "https://github.com/HelenSchmid/Filterzyme",
-          "Source Code": "https://github.com/HelenSchmid/Filterzyme",
+          "Bug Tracker": "https://github.com/moragroup/StructureZyme/issues",
+          "Documentation": "https://github.com/moragroup/StructureZyme",
+          "Source Code": "https://github.com/moragroup/StructureZyme",
       },
       classifiers=[
           'Development Status :: 5 - Production/Stable',
@@ -42,10 +42,10 @@ setup(name='structurezyme',
       packages=find_packages(exclude=["outdated", "outdated.*"]),
       entry_points={
           'console_scripts': [
-              'structurezyme = structurezyme.__main__:main'
+              'structurezyme = structurezyme.cli:main'
           ]
       },
-      install_requires=['pandas', 'numpy', 'tqdm', 'biopython', 'biotite', 'matplotlib', 'seaborn', 'rdkit', 'freesasa', 'enzymetk', 'docko', 'cuequivariance_torch'],
+      install_requires=['pandas', 'numpy', 'tqdm', 'biopython', 'biotite', 'matplotlib', 'seaborn', 'rdkit', 'freesasa', 'enzymetk', 'docko', 'cuequivariance_torch', 'pydantic>=2', 'pyyaml', 'filelock'],
       python_requires=">=3.10",
       data_files=[("", ["LICENSE"])]
       )
