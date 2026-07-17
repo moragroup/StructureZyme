@@ -141,7 +141,7 @@ def delete_empty_subdirs(directory):
     for subdir in directory.iterdir():
         if subdir.is_dir() and not any(subdir.iterdir()):
             subdir.rmdir()
-            print(f"Deleted empty directory: {subdir}")
+            logger.info(f"Deleted empty directory: {subdir}")
 
 
 class suppress_stdout_stderr:
@@ -512,7 +512,7 @@ def closest_ligands_by_element_composition(ligand_mols, reference_smiles, top_k 
             score = 1.0 - dist
             out.append((mol, score))
         except Exception as e:
-            print(f"Error processing ligand: {e}")
+            logger.error(f"Error processing ligand: {e}")
             continue
     # return closest matching lgiands
     out.sort(key=lambda t: t[1], reverse=True)
