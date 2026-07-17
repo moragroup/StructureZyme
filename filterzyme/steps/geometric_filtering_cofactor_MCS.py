@@ -95,7 +95,7 @@ def assign_bond_orders_from_smiles(pdb_mol, ligand_smiles):
         return new0 
 
     except Exception as e:
-        print("AssignBondOrdersFromTemplate failed:", e)
+        logger.warning(f"AssignBondOrdersFromTemplate failed: {e}")
         return pdb_mol
 
 def tolerant_query_from_smiles(moiety_smiles: str):
@@ -465,7 +465,7 @@ class GeneralGeometricFiltering(Step):
                 # Load full PDB structure
                 pdb_file = self.preparedfiles_dir / f"{docked_structure_name}.pdb"
                 pdb_file = Path(pdb_file)
-                print(f"Processing PDB file: {pdb_file.name}")
+                logger.info(f"Processing PDB file: {pdb_file.name}")
 
                 # Extract chain IDs of ligands
                 chain_ids = get_hetatm_chain_ids(pdb_file)
@@ -567,7 +567,7 @@ class GeneralGeometricFiltering(Step):
 
     def execute(self, df: pd.DataFrame) -> pd.DataFrame:
         if not self.output_dir:
-            print("No output directory provided")
+            logger.warning("No output directory provided")
             return df
 
         results = self.__execute(df, self.output_dir)        

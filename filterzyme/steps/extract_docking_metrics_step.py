@@ -157,7 +157,7 @@ class DockingMetrics(Step):
                     chain_chain_clashes_dict[fname] = round_sig(metrics["chain_chain_clashes"])
 
                 except Exception as e:
-                    print(f"Skipped {npz_file.name}: {e}")
+                    logger.warning(f"Skipped {npz_file.name}: {e}")
                     continue
 
             # Add all dicts to row
@@ -214,7 +214,7 @@ class DockingMetrics(Step):
                     boltz2_metrics_per_model["boltz2_pair_chains_iptm"][model_name] = metrics["pair_chains_iptm"]
 
                 except Exception as e:
-                    print(f"failed to parse {json_file.name}: {e}")
+                    logger.warning(f"failed to parse {json_file.name}: {e}")
 
             # extract affinity
             for json_file in sorted(boltz2_dir.glob("affinity_*.json")):
@@ -230,7 +230,7 @@ class DockingMetrics(Step):
                     boltz2_metrics_per_model["boltz2_affinity_probability_binary2"][model_name] = metrics["affinity_probability_binary2"]
 
                 except Exception as e:
-                    print(f"failed to parse {json_file.name}: {e}")
+                    logger.warning(f"failed to parse {json_file.name}: {e}")
 
             row_result.update(boltz2_metrics_per_model)
 
@@ -243,7 +243,7 @@ class DockingMetrics(Step):
                     try:
                         vina_affinities = parse_vina_output(log_path)
                     except Exception as e:
-                        print(f"Failed to parse vina log {log_path}: {e}")
+                        logger.warning(f"Failed to parse vina log {log_path}: {e}")
             row_result['vina_affinities'] = vina_affinities
 
             results.append(row_result)
@@ -252,7 +252,7 @@ class DockingMetrics(Step):
 
     def execute(self, df: pd.DataFrame) -> pd.DataFrame:
         if not self.output_dir:
-            print("No output directory provided")
+            logger.warning("No output directory provided")
             return df
 
         results = self.__execute(df, self.output_dir)

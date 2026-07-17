@@ -1,6 +1,6 @@
 from enzymetk.step import Step
 import pandas as pd
-from docko.docko import *
+from docko.docko import dock, get_alphafold_structure, clean_one_pdb, pdb_to_pdbqt_protein
 import logging
 import numpy as np
 import os
@@ -15,7 +15,7 @@ class Vina(Step):
     
     def __init__(self, id_col: str, structure_col: str, sequence_col: str, 
                  substrate_col: str, substrate_name_col: str, active_site_col: str, output_dir: str, num_threads: int):
-        print('Expects active site residues as a string separated by |. Zero indexed.')
+        logger.info('Expects active site residues as a string separated by |. Zero indexed.')
         self.id_col = id_col
         self.structure_col = structure_col
         self.sequence_col = sequence_col
@@ -25,15 +25,18 @@ class Vina(Step):
         self.output_dir = Path( output_dir) or None
         self.num_threads = num_threads or 1
 
-    def __execute(self, df: pd.DataFrame) -> pd.DataFrame:
+    def _execute(self, df: pd.DataFrame) -> pd.DataFrame:
         output_filenames = []
         # ToDo: update to create from sequence if the path doesn't exist.
         for label, structure_path, seq, substrate_smiles, substrate_name, residues in df[[self.id_col, self.structure_col, self.sequence_col, self.substrate_col, self.substrate_name_col, self.active_site_col]].values:
 
             try:
                 structure_path = str(structure_path)
-                residues = str(residues)
-                residues = [int(r) + 1 for r in residues.split('|')]
+                residues = [int(r) + 1 for r in str(residues).split('|') if r.strip()]
+                if not residues:
+                    logger.warning(f"Row {label}: empty active-site list, skipping")
+                    output_filenames.append(None)
+                    continue
 
                 label_dir = self.output_dir / label
                 label_dir.mkdir(parents=True, exist_ok=True)
@@ -46,7 +49,7 @@ class Vina(Step):
 
                 # Skip if still not found
                 if not structure_path.exists():
-                    print(f"Skipping {label}: AF2 structure not found.")
+                    logger.warning(f"Skipping {label}: AF2 structure not found.")
                     output_filenames.append(None)
                     continue
             
@@ -76,7 +79,7 @@ class Vina(Step):
                 output_filenames.append(str(pdb_path))
                 
             except Exception as e:
-                print(f'Error docking {label}: {e}')
+                logger.error(f'Error docking {label}: {e}')
                 output_filenames.append(None)
             
         return output_filenames
@@ -87,14 +90,14 @@ class Vina(Step):
             if self.num_threads > 1:
                 pool = ThreadPool(self.num_threads)
                 df_list = np.array_split(df, self.num_threads)
-                results = pool.map(self.__execute, df_list)
+                results = pool.map(self._execute, df_list)
                 pool.close()
                 pool.join()
                 # Flatten list of lists returned by pool.map
                 results = [item for sublist in results for item in sublist]
             else:
-                results = self.__execute(df)
+                results = self._execute(df)
             df['output_dir'] = results
             return df
         else:
-            print('No output directory provided')
+            logger.warning('No output directory provided')

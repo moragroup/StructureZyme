@@ -227,4 +227,4 @@ class PrepareVina(Step):
                 df['vina_files_for_superimposition'] = output_filenames
                 return df
         else:
-            print('No output directory provided')
+            logger.warning('No output directory provided')

@@ -99,7 +99,7 @@ class PLIP(Step):
             pdb_file_as_str = str(self.input_dir / f"{best_structure_name}.pdb")
             row_result = {}
 
-            print(f"Processing PDB file: {pdb_file_as_path.name}")
+            logger.info(f"Processing PDB file: {pdb_file_as_path.name}")
             
             try:
 
@@ -161,7 +161,7 @@ class PLIP(Step):
 
     def execute(self, df: pd.DataFrame) -> pd.DataFrame:
         if not self.output_dir:
-            print("No output directory provided")
+            logger.warning("No output directory provided")
             return df
 
         results = self.__execute(df, self.output_dir)        

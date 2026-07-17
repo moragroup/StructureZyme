@@ -104,7 +104,7 @@ class LigandSASA(Step):
                 'buried_sasa': None,
                 'percentage_buried_sasa': None}
 
-            print(f"Processing PDB file: {pdb_file.name}")
+            logger.info(f"Processing PDB file: {pdb_file.name}")
             
             try:
                 ligand = select_ligand_from_smiles_via_composition(pdb_file, substrate_smiles)
@@ -157,7 +157,7 @@ class LigandSASA(Step):
 
     def execute(self, df: pd.DataFrame) -> pd.DataFrame:
         if not self.output_dir:
-            print("No output directory provided")
+            logger.warning("No output directory provided")
             return df
 
         results = self.__execute(df, self.output_dir)        

@@ -86,8 +86,8 @@ def extract_ligand_from_pdb(structure, ligand_smiles, ligand_resname = 'LIG'):
     try:
         ligand_mol = AllChem.AssignBondOrdersFromTemplate(template_mol, pdb_mol)
     except Exception as e:
-        print(f"WARNING: Error assigning bond orders from template: {e}")
-        print("Proceeding with PDB-parsed molecule (may have incorrect bond orders/valency).")
+        logger.warning(f"Error assigning bond orders from template: {e}")
+        logger.warning("Proceeding with PDB-parsed molecule (may have incorrect bond orders/valency).")
         ligand_mol = pdb_mol # Fallback if assignment fails
 
     return ligand_mol
@@ -444,7 +444,7 @@ class EsteraseGeometricFiltering(Step):
             try:
                 # Load full PDB structure
                 pdb_file = self.preparedfiles_dir / f"{docked_structure_name}.pdb"
-                print(f"Processing PDB file: {pdb_file.name}")
+                logger.info(f"Processing PDB file: {pdb_file.name}")
                 protein_structure = load_pdb_structure(pdb_file)
 
                 # Extract ligand atoms from PDB
@@ -480,7 +480,7 @@ class EsteraseGeometricFiltering(Step):
 
     def execute(self, df: pd.DataFrame) -> pd.DataFrame:
         if not self.output_dir:
-            print("No output directory provided")
+            logger.warning("No output directory provided")
             return df
 
         results = self.__execute(df, self.output_dir)        

@@ -161,7 +161,7 @@ class CleanPDB(Step):
                             atom_name = atom_name.split('_')[0]
                             # Right-align to 4 characters, as per PDB format
                             line = line[:12] + f"{atom_name:>4}" + line[16:]
-                            print('test')
+                            logger.debug('renamed atom_name (dropped _suffix)')
 
                 outfile.write(line)
 

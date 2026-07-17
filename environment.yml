@@ -17,22 +17,12 @@ dependencies:
   - fpocket
   - pip
   - plip
-  # - pip:
-  #   - enzymetk
-  #   - filterzyme
-  #   - rdkit
-  #   - freesasa
-  #   - docko
-  #   - chai_lab
-  #   - squidly  # catalytic-residue prediction CLI; requires GPU for ESM2 inference
-
-
-#   import sys
-# from docko.boltz import *
-
-# base_dir = ''
-# run_boltz('boltzproteinexample', 
-#          'MSIEKIPGYTYGKTESMSPLNLEDLKLLKDSVMFTEEDEKYLKKAGEVLEDQVEEILDTWYGFVGSHPHLLYYFTSPDGTPNEEYLAAVRKRFSKWILDTCNRNYDQAWLDYQYEIGLRHHRTKKNRTDNVESVPNINYRYLVAFIYPITATIKPFLARKGHTSEEVEKMHQAWFKATVLQVALWSYPYVKQGDF', 
-#          'CCCCC(CC)COC(=O)C1=CC=CC=C1C(=O)OCC(CC)CCCC',
-#          base_dir
-#         )
+  - pip:
+    # NOTE: after creating this env, install the package itself with: pip install -e .
+    - enzymetk
+    # - filterzyme  # removed: self-referential; install via `pip install -e .` instead
+    - rdkit
+    - freesasa
+    - docko
+    - chai_lab
+    - squidly  # catalytic-residue prediction CLI; requires GPU for ESM2 inference

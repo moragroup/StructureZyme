@@ -186,7 +186,7 @@ def superimpose_within_same_docked_structure(protein_dict, ligand_dict, entry_na
                 output_paths.append(write_structure_to_file(combined, output_dir, entry_name, key1, key2))
             
             except Exception as e:
-                print(f"Failed {entry_name} {key1} vs {key2}: {e}")
+                logger.error(f"Failed {entry_name} {key1} vs {key2}: {e}")
             
     return output_paths
 
@@ -227,7 +227,7 @@ def superimpose_different_docked_structure(protein_1_dict, ligand_1_dict, protei
                 output_paths.append(write_structure_to_file(combined, output_dir, entry_name, structure1_key, structure2_key))
 
             except Exception as e:
-                print(f"Failed {entry_name} {structure1_key} vs {structure2_key}: {e}")
+                logger.error(f"Failed {entry_name} {structure1_key} vs {structure2_key}: {e}")
 
     return output_paths
 
@@ -313,5 +313,5 @@ class SuperimposeStructures(Step):
                 df['superimposedstructure_dir'] = output_filenames
                 return df
         else:
-            print('No output directory provided')
+            logger.warning('No output directory provided')
 

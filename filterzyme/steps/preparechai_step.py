@@ -87,7 +87,7 @@ def convert_cif_to_pdb(cif_filepath, pdb_filepath=None, heme = 0):
         return pdb_filepath
 
     except Exception as e:
-        print(f"Error converting {cif_filepath}: {e}")
+        logger.error(f"Error converting {cif_filepath}: {e}")
         return None
 
 
@@ -146,7 +146,7 @@ def convert_cif_to_pdb(cif_filepath, pdb_filepath=None, heme=0):
         return pdb_filepath
 
     except Exception as e:
-        print(f"Error converting {cif_filepath}: {e}")
+        logger.error(f"Error converting {cif_filepath}: {e}")
         return None
 
 
@@ -206,4 +206,4 @@ class PrepareChai(Step):
                 df['chai_files_for_superimposition'] = output_filenames
                 return df
         else:
-            print('No output directory provided')
+            logger.warning('No output directory provided')

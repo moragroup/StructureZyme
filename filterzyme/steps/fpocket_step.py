@@ -137,7 +137,7 @@ def extract_SASA(fpocket_txt_path: Path) -> dict:
     }
 
     if not fpocket_txt_path.exists():
-        print(f"Error: Fpocket txt output file not found at {fpocket_txt_path}")
+        logger.error(f"Fpocket txt output file not found at {fpocket_txt_path}")
         return sasa_values
 
     try:
@@ -158,7 +158,7 @@ def extract_SASA(fpocket_txt_path: Path) -> dict:
             sasa_values["apolar_sasa"] = float(apolar_sasa_match.group(1))
 
     except Exception as e:
-        print(f"An error occurred while reading or parsing the file {fpocket_txt_path}: {e}")
+        logger.error(f"An error occurred while reading or parsing the file {fpocket_txt_path}: {e}")
         # Return initialized dictionary with Nones in case of error
         return {
             "total_sasa": None,
