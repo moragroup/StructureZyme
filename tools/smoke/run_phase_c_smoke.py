@@ -13,7 +13,7 @@ Prerequisites:
     vina Python module -- all installed in the structurezyme env.
 
 Usage:
-  python run_phase_c_smoke.py --boltz-cache /path/to/boltz/cache \
+  python tools/smoke/run_phase_c_smoke.py --boltz-cache /path/to/boltz/cache \
                               --output-dir pipeline_output_phaseC
 """
 import argparse

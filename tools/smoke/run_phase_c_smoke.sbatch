@@ -22,7 +22,7 @@ OUTPUT_DIR="${OUTPUT_DIR:-pipeline_output_phaseC_vina}"
 echo "host=$(hostname)  python=$(which python)  squidly=$(which squidly)"
 nvidia-smi | head -20 || true
 
-python run_phase_c_smoke.py \
+python "$(dirname "$0")/run_phase_c_smoke.py" \
     --boltz-cache "$BOLTZ_CACHE" \
     --output-dir "$OUTPUT_DIR"
 
