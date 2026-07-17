@@ -1,4 +1,4 @@
-name: filterpipeline2
+name: structurezyme
 channels:
   - conda-forge
   - https://repo.anaconda.com/pkgs/main
@@ -26,3 +26,6 @@ dependencies:
     - docko
     - chai_lab
     - squidly  # catalytic-residue prediction CLI; requires GPU for ESM2 inference
+    - pydantic
+    - pyyaml
+    - filelock

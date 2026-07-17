@@ -65,7 +65,7 @@ import time
 import psutil
 from functools import wraps
 
-def log_usage(section_name: str, log_file: str = "filterzyme_usage.log"):
+def log_usage(section_name: str, log_file: str = "structurezyme_usage.log"):
     """
     Measure wall time and memory usage of a function.
     Logs results to both stdout and a file.
