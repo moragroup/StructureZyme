@@ -254,3 +254,6 @@ models/
 
 # Git worktrees (isolated workspaces for feature branches)
 .worktrees/
+
+# Retired code and stale bundled weights (superseded; kept on disk for reference)
+outdated/
