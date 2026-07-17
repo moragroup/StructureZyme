@@ -66,7 +66,7 @@ class Squidly(Step):
     The `squidly` CLI must be on `$PATH` in the current environment. The
     upstream `enzymetk.ActiveSitePred` defaults to wrapping the invocation in
     `conda run -n enzymetk`, which would fail because `squidly` is installed
-    in the `filterzyme` env, not `enzymetk`. We therefore pass `env_name=None`
+    in the `structurezyme` env, not `enzymetk`. We therefore pass `env_name=None`
     so the CLI runs directly in the current shell.
     """
 
@@ -168,7 +168,7 @@ class Squidly(Step):
 
         reps = self._build_representatives(df)
 
-        # Lazy import so `import filterzyme` doesn't drag in enzymetk/torch.
+        # Lazy import so `import structurezyme` doesn't drag in enzymetk/torch.
         from enzymetk.predict_catalyticsite_step import ActiveSitePred
 
         pred = ActiveSitePred(

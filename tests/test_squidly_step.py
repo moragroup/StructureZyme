@@ -1,4 +1,4 @@
-"""Tests for `filterzyme.steps.squidly_step`.
+"""Tests for `structurezyme.steps.squidly_step`.
 
 The CLI-dependent test (`test_squidly_execute_smoke`) is skipped automatically
 when the `squidly` binary is not on $PATH or its model weights are not
@@ -14,7 +14,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from filterzyme.steps.squidly_step import Squidly, _normalize_residues
+from structurezyme.steps.squidly_step import Squidly, _normalize_residues
 
 
 # A short, real serine-hydrolase-like sequence (~120 aa) with a known catalytic

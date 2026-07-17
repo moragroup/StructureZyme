@@ -1,16 +1,16 @@
 """Phase C smoke test: full pipeline with Squidly catalytic-residue prediction.
 
-Run this on a GPU node with the filterzyme env activated and a real Boltz
+Run this on a GPU node with the structurezyme env activated and a real Boltz
 cache directory. It exercises the full chain:
   Squidly -> Chai -> Boltz -> Vina -> DockingMetrics
 
 Prerequisites:
-  - conda activate filterzyme
+  - conda activate structurezyme
   - `squidly` on $PATH (verify with `which squidly`)
   - a Boltz cache directory (run `boltz predict example.yml --cache <dir>`)
   - a GPU (ESM2 3B inference needs CUDA)
   - Vina toolchain: vina CLI, obabel, meeko (mk_prepare_ligand.py),
-    vina Python module -- all installed in the filterzyme env.
+    vina Python module -- all installed in the structurezyme env.
 
 Usage:
   python run_phase_c_smoke.py --boltz-cache /path/to/boltz/cache \
@@ -21,7 +21,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from filterzyme.pipeline_v2 import Pipeline
+from structurezyme.pipeline import Pipeline
 
 
 def main():
@@ -77,10 +77,10 @@ def main():
         'vina_residues': ['129|211|248'],
     })
 
-    # Vina toolchain (installed in filterzyme env earlier in this session):
+    # Vina toolchain (installed in structurezyme env earlier in this session):
     #   - obabel               : pre-existing
     #   - mk_prepare_ligand.py : pip install meeko
-    #   - vina CLI v1.2.5      : static binary in envs/filterzyme/bin/vina
+    #   - vina CLI v1.2.5      : static binary in envs/structurezyme/bin/vina
     #   - vina Python lib      : pip install vina
     # docko/helpers.py patched to invoke mk_prepare_ligand.py directly
     # instead of `conda run -n vina ...`.

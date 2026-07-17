@@ -7,7 +7,7 @@ import re
 from tempfile import TemporaryDirectory
 from multiprocessing.dummy import Pool as ThreadPool
 
-from filterzyme.steps.step import Step
+from structurezyme.steps.step import Step
 
 
 from Bio.PDB import MMCIFParser

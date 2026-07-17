@@ -4,7 +4,7 @@ import re
 
 
 def read_version():
-    path = os.path.join(os.path.abspath(os.path.dirname(__file__)), 'filterzyme/__init__.py')
+    path = os.path.join(os.path.abspath(os.path.dirname(__file__)), 'structurezyme/__init__.py')
     with open(path, 'r') as fh:
         return re.search(r'__version__\s?=\s?[\'"](.+)[\'"]', fh.read()).group(1)
 
@@ -14,7 +14,7 @@ def readme():
         return f.read()
 
 
-setup(name='filterzyme',
+setup(name='structurezyme',
       version=read_version(),
       description='',
       long_description=readme(),
@@ -42,7 +42,7 @@ setup(name='filterzyme',
       packages=find_packages(exclude=["outdated", "outdated.*"]),
       entry_points={
           'console_scripts': [
-              'filterzyme = filterzyme.__main__:main'
+              'structurezyme = structurezyme.__main__:main'
           ]
       },
       install_requires=['pandas', 'numpy', 'tqdm', 'biopython', 'biotite', 'matplotlib', 'seaborn', 'rdkit', 'freesasa', 'enzymetk', 'docko', 'cuequivariance_torch'],

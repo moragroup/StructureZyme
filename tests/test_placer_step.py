@@ -1,4 +1,4 @@
-"""Tests for filterzyme.steps.PLACER_step.
+"""Tests for structurezyme.steps.PLACER_step.
 
 Covers the module-level `_count_ligands` helper (ported from the deleted
 `PLACER_forChai_step._count_ligands` method) and the `PLACER` step
@@ -13,7 +13,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from filterzyme.steps.PLACER_step import (
+from structurezyme.steps.PLACER_step import (
     PLACER,
     _count_ligands,
     _parse_placer_csv,

@@ -7,28 +7,28 @@ import time
 import psutil
 from functools import wraps
 
-from filterzyme.utils.helpers import log_section, log_subsection, log_boxed_note, generate_boltz_structure_path, generate_chai_structure_path
-from filterzyme.utils.helpers import clean_protein_sequence, delete_empty_subdirs, extract_docking_metrics, valid_file_list, add_metrics
-from filterzyme.utils.helpers import log_usage
-from filterzyme.steps.save_step import Save
-from filterzyme.steps.dock_vina_step import Vina
-from filterzyme.steps.extract_docking_metrics_step import DockingMetrics
-from filterzyme.steps.preparevina_step import PrepareVina
-from filterzyme.steps.preparechai_step import PrepareChai
-from filterzyme.steps.prepareboltz_step import PrepareBoltz
-from filterzyme.steps.superimposestructures_step import SuperimposeStructures
-from filterzyme.steps.computeproteinRMSD_step import ProteinRMSD
-from filterzyme.steps.computeligandRMSD_step import LigandRMSD
-from filterzyme.steps.geometric_filtering_cofactor_MCS import GeneralGeometricFiltering
-from filterzyme.steps.geometric_filtering_esterase import EsteraseGeometricFiltering
-from filterzyme.steps.fpocket_step import Fpocket
-from filterzyme.steps.ligandSASA_step import LigandSASA
-from filterzyme.steps.plip_step import PLIP
-from filterzyme.steps.fastrelax_step import FastRelax
+from structurezyme.utils.helpers import log_section, log_subsection, log_boxed_note, generate_boltz_structure_path, generate_chai_structure_path
+from structurezyme.utils.helpers import clean_protein_sequence, delete_empty_subdirs, extract_docking_metrics, valid_file_list, add_metrics
+from structurezyme.utils.helpers import log_usage
+from structurezyme.steps.save_step import Save
+from structurezyme.steps.dock_vina_step import Vina
+from structurezyme.steps.extract_docking_metrics_step import DockingMetrics
+from structurezyme.steps.preparevina_step import PrepareVina
+from structurezyme.steps.preparechai_step import PrepareChai
+from structurezyme.steps.prepareboltz_step import PrepareBoltz
+from structurezyme.steps.superimposestructures_step import SuperimposeStructures
+from structurezyme.steps.computeproteinRMSD_step import ProteinRMSD
+from structurezyme.steps.computeligandRMSD_step import LigandRMSD
+from structurezyme.steps.geometric_filtering_cofactor_MCS import GeneralGeometricFiltering
+from structurezyme.steps.geometric_filtering_esterase import EsteraseGeometricFiltering
+from structurezyme.steps.fpocket_step import Fpocket
+from structurezyme.steps.ligandSASA_step import LigandSASA
+from structurezyme.steps.plip_step import PLIP
+from structurezyme.steps.fastrelax_step import FastRelax
 
 from enzymetk.dock_chai_step import Chai
 from enzymetk.dock_boltz_step import Boltz
-from filterzyme.steps.squidly_step import Squidly
+from structurezyme.steps.squidly_step import Squidly
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -570,7 +570,7 @@ class Pipeline:
 
         # PLACER pose prediction (opt-in)
         if self.run_placer:
-            from filterzyme.steps.PLACER_step import PLACER
+            from structurezyme.steps.PLACER_step import PLACER
             geo_pkl = Path(self.base_output_dir) / "geometricfiltering" / "structural_features_final.pkl"
             df_geo = pd.read_pickle(geo_pkl)
             placer = PLACER(

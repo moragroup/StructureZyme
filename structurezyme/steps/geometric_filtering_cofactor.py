@@ -15,8 +15,8 @@ from rdkit.Geometry import Point3D
 from rdkit import RDLogger
 from itertools import product
 
-from filterzyme.steps.step import Step
-from filterzyme.utils.helpers import (
+from structurezyme.steps.step import Step
+from structurezyme.utils.helpers import (
     get_hetatm_chain_ids,
     extract_chain_as_rdkit_mol,
     closest_ligands_by_element_composition,

@@ -6,10 +6,10 @@ import sys
 import argparse
 from pathlib import Path 
 
-from filterzyme.pipeline_v2 import Pipeline
-from filterzyme.pipeline_v2 import Docking
-from filterzyme.pipeline_v2 import Superimposition
-from filterzyme.pipeline_v2 import GeometricFilters
+from structurezyme.pipeline import Pipeline
+from structurezyme.pipeline import Docking
+from structurezyme.pipeline import Superimposition
+from structurezyme.pipeline import GeometricFilters
 
 
 df = pd.read_csv('PBP_data_formatted.csv')

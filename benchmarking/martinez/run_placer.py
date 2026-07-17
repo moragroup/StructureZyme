@@ -17,8 +17,8 @@ logging.basicConfig(
 )
 
 sys.path.insert(0, '/nvme2/helen/EnzymeStructuralFiltering/')
-from filterzyme.steps.PLACER_forChai_step import PLACER   
-import filterzyme
+from structurezyme.steps.PLACER_forChai_step import PLACER   
+import structurezyme
 
 df = pd.read_pickle('/nvme2/helen/EnzymeStructuralFiltering/benchmarking/martinez/filterzyme_output/geometricfiltering/structural_features_final.pkl')
 

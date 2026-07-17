@@ -1,5 +1,5 @@
-from filterzyme.steps.step import Step
-from filterzyme.utils.helpers import clean_plt,extract_entry_name_from_PDB_filename
+from structurezyme.steps.step import Step
+from structurezyme.utils.helpers import clean_plt,extract_entry_name_from_PDB_filename
 
 import pandas as pd
 from pathlib import Path

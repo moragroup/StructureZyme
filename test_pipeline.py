@@ -1,4 +1,4 @@
-"""Minimal smoke test for filterzyme.pipeline_v2.Pipeline.
+"""Minimal smoke test for structurezyme.pipeline.Pipeline.
 
 This replaces the old test_pipeline.py which imported the long-gone
 `filtering_pipeline` package. It verifies that the v2 pipeline can be
@@ -14,14 +14,14 @@ import pytest
 
 def test_pipeline_v2_import():
     """Pipeline and Docking can be imported from pipeline_v2."""
-    from filterzyme.pipeline_v2 import Pipeline, Docking
+    from structurezyme.pipeline import Pipeline, Docking
     assert Pipeline is not None
     assert Docking is not None
 
 
 def test_docking_accepts_squidly_kwargs():
     """Docking.__init__ accepts the squidly_* kwargs added in Phase B."""
-    from filterzyme.pipeline_v2 import Docking
+    from structurezyme.pipeline import Docking
     import inspect
     sig = inspect.signature(Docking.__init__)
     params = sig.parameters
@@ -34,7 +34,7 @@ def test_docking_accepts_squidly_kwargs():
 
 def test_pipeline_accepts_squidly_kwargs():
     """Pipeline.__init__ forwards the squidly_* kwargs to Docking."""
-    from filterzyme.pipeline_v2 import Pipeline
+    from structurezyme.pipeline import Pipeline
     import inspect
     sig = inspect.signature(Pipeline.__init__)
     params = sig.parameters
@@ -45,7 +45,7 @@ def test_pipeline_accepts_squidly_kwargs():
 
 def test_pipeline_construction():
     """Pipeline can be constructed with a minimal DataFrame."""
-    from filterzyme.pipeline_v2 import Pipeline
+    from structurezyme.pipeline import Pipeline
     df = pd.DataFrame({
         "Entry": ["enzyme_1"],
         "Sequence": ["MKTAYIAKQRQISFVKSHFSRQLEERLGLIEVQAPILSRVGDGTQDNLSGAEK"],
@@ -64,7 +64,7 @@ def test_pipeline_construction():
 
 def test_pipeline_accepts_placer_kwargs():
     """Pipeline.__init__ accepts run_placer + 4 placer_* kwargs with correct defaults."""
-    from filterzyme.pipeline_v2 import Pipeline
+    from structurezyme.pipeline import Pipeline
     import inspect
     sig = inspect.signature(Pipeline.__init__)
     params = sig.parameters
@@ -82,7 +82,7 @@ def test_pipeline_accepts_placer_kwargs():
 
 def test_pipeline_run_placer_without_ligand_raises():
     """Pipeline(run_placer=True) without placer_predict_ligand raises ValueError."""
-    from filterzyme.pipeline_v2 import Pipeline
+    from structurezyme.pipeline import Pipeline
     import pandas as pd
     df = pd.DataFrame({
         "Entry": ["e1"],
@@ -102,9 +102,9 @@ def test_pipeline_run_placer_without_ligand_raises():
 
 def test_pipeline_run_placer_false_skips_placer(tmp_path, monkeypatch):
     """When run_placer=False (default), PLACER.execute is never invoked."""
-    from filterzyme.pipeline_v2 import Pipeline
-    from filterzyme.steps import PLACER_step
-    import filterzyme.pipeline_v2 as pv2
+    from structurezyme.pipeline import Pipeline
+    from structurezyme.steps import PLACER_step
+    import structurezyme.pipeline as pv2
     import pandas as pd
 
     # Stub upstream steps so run() short-circuits harmlessly.
@@ -150,9 +150,9 @@ def test_pipeline_run_placer_false_skips_placer(tmp_path, monkeypatch):
 
 def test_pipeline_run_placer_true_invokes_execute(tmp_path, monkeypatch):
     """When run_placer=True, PLACER.execute is called once with the geo pkl DataFrame."""
-    from filterzyme.pipeline_v2 import Pipeline
-    from filterzyme.steps import PLACER_step
-    import filterzyme.pipeline_v2 as pv2
+    from structurezyme.pipeline import Pipeline
+    from structurezyme.steps import PLACER_step
+    import structurezyme.pipeline as pv2
     import pandas as pd
 
     monkeypatch.setattr(pv2.Docking, "run", lambda self: None)
@@ -210,7 +210,7 @@ def test_pipeline_run_placer_true_invokes_execute(tmp_path, monkeypatch):
 
 def test_superimposition_accepts_fastrelax_kwargs():
     """Superimposition.__init__ accepts the fastrelax_* kwargs + ligand_resname."""
-    from filterzyme.pipeline_v2 import Superimposition
+    from structurezyme.pipeline import Superimposition
     import inspect
     sig = inspect.signature(Superimposition.__init__)
     params = sig.parameters
@@ -235,7 +235,7 @@ def test_superimposition_accepts_fastrelax_kwargs():
 def _superimposition_run_stubs(monkeypatch):
     """Monkeypatch Superimposition's heavy per-step helpers to lightweight
     stubs so `.run()` can be exercised in-process without file I/O."""
-    from filterzyme.pipeline_v2 import Superimposition
+    from structurezyme.pipeline import Superimposition
     monkeypatch.setattr(
         Superimposition, "_prepare_files_for_superimposition",
         lambda self: pd.DataFrame({"Entry": ["e1"]}),
@@ -257,7 +257,7 @@ def _superimposition_run_stubs(monkeypatch):
 def test_superimposition_run_fastrelax_skips_when_disabled(tmp_path, monkeypatch):
     """When run_fastrelax=False, `_run_fastrelax` must NOT be called."""
     from unittest.mock import MagicMock
-    from filterzyme.pipeline_v2 import Superimposition
+    from structurezyme.pipeline import Superimposition
     _superimposition_run_stubs(monkeypatch)
     mock_fr = MagicMock()
     monkeypatch.setattr(Superimposition, "_run_fastrelax", mock_fr)
@@ -275,7 +275,7 @@ def test_superimposition_run_fastrelax_called_when_enabled(tmp_path, monkeypatch
     """When run_fastrelax=True, `_run_fastrelax` must be called with df_prep,
     and its return value must flow into `_superimposition`."""
     from unittest.mock import MagicMock
-    from filterzyme.pipeline_v2 import Superimposition
+    from structurezyme.pipeline import Superimposition
     _superimposition_run_stubs(monkeypatch)
 
     df_prep = pd.DataFrame({"Entry": ["e1"]})
@@ -314,7 +314,7 @@ def test_run_fastrelax_constructs_fastrelax_step_correctly(tmp_path, monkeypatch
     `.execute(df_prep)`, and return execute()'s return value."""
     from unittest.mock import MagicMock
     from pathlib import Path
-    import filterzyme.pipeline_v2 as pv2
+    import structurezyme.pipeline as pv2
 
     df_prep = pd.DataFrame({"Entry": ["e1"]})
     df_after = pd.DataFrame({"Entry": ["e1"], "relaxed": [True]})
@@ -359,7 +359,7 @@ def test_run_fastrelax_constructs_fastrelax_step_correctly(tmp_path, monkeypatch
 def test_pipeline_accepts_fastrelax_kwargs():
     """Pipeline.__init__ accepts the 8 fastrelax_* / ligand_resname kwargs
     with correct defaults."""
-    from filterzyme.pipeline_v2 import Pipeline
+    from structurezyme.pipeline import Pipeline
     import inspect
     sig = inspect.signature(Pipeline.__init__)
     params = sig.parameters
@@ -385,7 +385,7 @@ def test_pipeline_forwards_fastrelax_kwargs_to_superimposition(tmp_path, monkeyp
     """Pipeline.run() must construct Superimposition with fastrelax_* and
     ligand_resname kwargs threaded through from Pipeline's own attrs."""
     from unittest.mock import MagicMock
-    import filterzyme.pipeline_v2 as pv2
+    import structurezyme.pipeline as pv2
 
     df = pd.DataFrame({
         "Entry": ["e1"],

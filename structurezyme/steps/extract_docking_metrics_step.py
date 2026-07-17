@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 import json
 
-from filterzyme.steps.step import Step
+from structurezyme.steps.step import Step
 
 import logging
 logger = logging.getLogger(__name__)

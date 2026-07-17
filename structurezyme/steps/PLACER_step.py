@@ -26,7 +26,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from filterzyme.steps.step import Step
+from structurezyme.steps.step import Step
 
 logger = logging.getLogger(__name__)
 

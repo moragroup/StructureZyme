@@ -20,10 +20,10 @@ from io import StringIO
 import tempfile
 from collections import Counter
 
-from filterzyme.steps.step import Step
-from filterzyme.utils.helpers import get_hetatm_chain_ids, norm_l1_dist,atom_composition_fingerprint
-from filterzyme.utils.helpers import closest_ligands_by_element_composition, atom_composition_fingerprint, extract_chain_as_rdkit_mol
-from filterzyme.utils.helpers import as_mol, ensure_3d
+from structurezyme.steps.step import Step
+from structurezyme.utils.helpers import get_hetatm_chain_ids, norm_l1_dist,atom_composition_fingerprint
+from structurezyme.utils.helpers import closest_ligands_by_element_composition, atom_composition_fingerprint, extract_chain_as_rdkit_mol
+from structurezyme.utils.helpers import as_mol, ensure_3d
 
 RDLogger.DisableLog('rdApp.warning')
 

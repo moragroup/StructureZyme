@@ -1,4 +1,4 @@
-"""Tests for `filterzyme.steps.fastrelax_step`.
+"""Tests for `structurezyme.steps.fastrelax_step`.
 
 Covers the ranking/selection logic of the `FastRelax` step (dict-key
 extraction from file paths, per-engine top-K pose ranking, column
@@ -14,7 +14,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from filterzyme.steps.fastrelax_step import (
+from structurezyme.steps.fastrelax_step import (
     FastRelax,
     _apply_relaxed_paths,
     _confidence_key_from_path,

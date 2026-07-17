@@ -21,8 +21,8 @@ from scipy.spatial.distance import cdist
 from openbabel import openbabel as ob
 from openbabel import pybel
 
-from filterzyme.steps.step import Step
-from filterzyme.utils.helpers import (
+from structurezyme.steps.step import Step
+from structurezyme.utils.helpers import (
     clean_plt,
     get_hetatm_chain_ids,
     extract_chain_as_rdkit_mol,

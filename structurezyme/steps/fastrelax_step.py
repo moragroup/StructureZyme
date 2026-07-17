@@ -11,7 +11,7 @@ rewrite each engine's list in place.
 The pure-Python parts (column validation, per-engine top-K ranking, and
 dict-key <-> file-path matching) live at module scope and are always
 importable. The PyRosetta-dependent parts (`_relax_one`) import
-`pyrosetta` lazily inside the method so that `import filterzyme` does
+`pyrosetta` lazily inside the method so that `import structurezyme` does
 not require PyRosetta to be installed.
 """
 from __future__ import annotations
@@ -55,7 +55,7 @@ def _confidence_key_from_path(path: str, engine: str):
 
     Vina: does NOT use suffix-stripping. `vina_affinities` is keyed by the
     bare 1-indexed pose number, extracted as `int(stem.split('_')[-2])`,
-    mirroring `extract_vina_index` in `filterzyme/utils/helpers.py`
+    mirroring `extract_vina_index` in `structurezyme/utils/helpers.py`
     (`add_metrics`).
     """
     stem = Path(path).stem
@@ -185,7 +185,7 @@ class FastRelax(Step):
         abort the run.
 
         `pyrosetta` is imported lazily inside this method so that
-        `import filterzyme` doesn't require PyRosetta. If the import
+        `import structurezyme` doesn't require PyRosetta. If the import
         fails, a clear `RuntimeError` is raised pointing the user at
         the shared installer location (per the spec's "Shared Software
         Locations" section).

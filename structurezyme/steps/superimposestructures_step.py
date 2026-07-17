@@ -8,7 +8,7 @@ from io import StringIO
 from tqdm import tqdm
 import numpy as np
 
-from filterzyme.steps.step import Step
+from structurezyme.steps.step import Step
 
 
 import biotite.database.rcsb as rcsb
