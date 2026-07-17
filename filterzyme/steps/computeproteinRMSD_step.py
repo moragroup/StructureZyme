@@ -187,12 +187,12 @@ class ProteinRMSD(Step):
 
         # Iterate through all subdirectories in the input directory
         for sub_dir in self.input_dir.iterdir():
-            print(f"Processing entry: {sub_dir.name}")
+            logger.info(f"Processing entry: {sub_dir.name}")
 
             # Process all PDB files in subdirectories
             for pdb_file_path in sub_dir.glob("*.pdb"):
                 if not pdb_file_path.exists():
-                    print(f"File does not exist: {pdb_file_path}")
+                    logger.warning(f"File does not exist: {pdb_file_path}")
 
                 rmsd = compute_proteinRMSD(pdb_file_path)  # Compute protein RMSD for the PDB file
 
@@ -232,14 +232,14 @@ class ProteinRMSD(Step):
         )
 
         # Merge both stats into rmsd_df
-        print("Merging entry-wise stats into main RMSD dataframe...")
-        print(entry_pair_stats.columns)
-        print(entry_pair_stats.head())
-        print(entry_overall_stats.columns)
-        print(entry_overall_stats.head())
+        logger.info("Merging entry-wise stats into main RMSD dataframe...")
+        logger.debug(f"entry_pair_stats columns: {entry_pair_stats.columns.tolist()}")
+        logger.debug(f"entry_pair_stats head:\n{entry_pair_stats.head().to_string()}")
+        logger.debug(f"entry_overall_stats columns: {entry_overall_stats.columns.tolist()}")
+        logger.debug(f"entry_overall_stats head:\n{entry_overall_stats.head().to_string()}")
         rmsd_df = rmsd_df.merge(entry_pair_stats, how="left") #on="Entry",
         rmsd_df = rmsd_df.merge(entry_overall_stats, how="left") #on="Entry",
-        print(rmsd_df)
+        logger.info(f"rmsd_df:\n{rmsd_df.to_string()}")
 
         # Optionally generate heatmaps
         if self.visualize_heatmaps:
