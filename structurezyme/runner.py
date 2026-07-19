@@ -81,6 +81,13 @@ class Runner:
             skip, reason = self._should_skip(name, spec)
             if skip:
                 self.logger.info(f"{reason}: {name}")
+                if reason == "SKIPPED_CHECKPOINT":
+                    # Preserve the existing OK record (status + timing metadata).
+                    # Overwriting it would flip status away from "OK" and cause
+                    # _should_skip to re-run the step on the next invocation,
+                    # defeating resumability for every run after the second.
+                    continue
+                # SKIPPED_DISABLED: no OK record to preserve; flag it explicitly.
                 self.manifest.set(name, StepRecord(
                     status=reason,
                     pkl_path=str(self.layout.checkpoint_path(spec.output)),
