@@ -52,7 +52,7 @@ def _normalize_residues(value) -> str:
 
 
 class Squidly(Step):
-    """Thin Filterzyme wrapper around `enzymetk.ActiveSitePred`.
+    """Thin StructureZyme wrapper around `enzymetk.ActiveSitePred`.
 
     Single responsibility: invoke the upstream `squidly` CLI via enzymetk and
     return its predictions on the full input DataFrame, with the upstream
