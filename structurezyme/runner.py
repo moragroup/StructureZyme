@@ -12,6 +12,32 @@ from .manifest import Manifest, StepRecord
 from .registry import STEPS, StepSpec, ordered_steps
 from .hashing import hash_obj, hash_files
 
+REQUIRED_INPUT_COLUMNS: dict[str, list[str]] = {
+    "_base": ["Sequence", "substrate_smiles", "Entry"],
+    "vina": ["vina_residues"],
+    "geometric_filter": ["substrate_moiety"],
+}
+
+
+def _load_input_frame(path: str) -> pd.DataFrame:
+    """Load the seed input DataFrame from a CSV or pickle file."""
+    if str(path).endswith((".pkl", ".pickle")):
+        return pd.read_pickle(path)
+    return pd.read_csv(path)
+
+
+def missing_input_columns(df: pd.DataFrame, enabled: set[str]) -> dict[str, list[str]]:
+    """Return {group: [missing cols]} for the base plus each enabled module."""
+    cols = set(df.columns)
+    groups = ["_base"] + [m for m in REQUIRED_INPUT_COLUMNS if m != "_base" and m in enabled]
+    out: dict[str, list[str]] = {}
+    for g in groups:
+        miss = [c for c in REQUIRED_INPUT_COLUMNS[g] if c not in cols]
+        if miss:
+            out[g] = miss
+    return out
+
+
 @dataclass
 class RunContext:
     config: RunConfig
