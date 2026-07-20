@@ -49,5 +49,4 @@ setup(name='structurezyme',
       },
       install_requires=['pandas', 'numpy', 'tqdm', 'biopython', 'biotite', 'matplotlib', 'seaborn', 'rdkit', 'freesasa', 'enzymetk', 'docko', 'cuequivariance_torch', 'pydantic>=2', 'pyyaml', 'filelock'],
       python_requires=">=3.10",
-      data_files=[("", ["LICENSE"])]
       )
