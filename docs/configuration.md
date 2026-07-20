@@ -24,7 +24,7 @@ cfg = load_config("run.yml")   # -> RunConfig
 |-------|---------|---------|
 | `output_root` | `""` | Root directory for run outputs. Runs are written to `{output_root}/{user}/{run_id}/`. Required at run time (may be left empty and filled by a host profile — see [multi_user.md](multi_user.md)). |
 | `boltz_cache_dir` | `""` | Directory for the shared Boltz model cache. Required at run time (may be filled by a host profile). |
-| `input_csv` | `""` | Path to the input data file (`.csv` or pandas `.pkl`/`.pickle`) that seeds the run. Required at run time. See [Input data](#input-data-input_csv) below. |
+| `input_csv` | `""` | Path to the input data file (`.csv` or pandas `.pkl`/`.pickle`) that seeds the run. Required at run time. See [Input data](#input-data-pathsinput_csv) below. |
 | `squidly_weights_dir` | `null` | Directory holding Squidly model weights. Optional; when unset, Squidly uses its packaged default. |
 | `placer_env_path` | `/mnt/labs/data/mora/software/PLACER/env` | Path to the PLACER conda environment (only used when the `placer` step is enabled). |
 
