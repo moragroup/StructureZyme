@@ -346,8 +346,29 @@ def run_fastrelax(ctx, spec) -> pd.DataFrame:
     return step.execute(df_prep)
 
 
+def _superimpose_input(ctx, spec) -> pd.DataFrame:
+    """Select the frame superimposition operates on.
+
+    Legacy ``Superimposition.run`` fed the *fastrelax-modified* frame into
+    ``_superimposition`` when ``run_fastrelax=True``. In the modular DAG,
+    fastrelax is an optional step, so we consume its checkpoint when the step
+    is enabled *and* it actually produced one; otherwise we fall back to the
+    ``prepare_files`` frame (the un-relaxed path). This keeps the default
+    (fastrelax disabled) behavior identical while restoring the relaxed-input
+    behavior when fastrelax runs.
+    """
+    if ctx.config.is_enabled("fastrelax"):
+        fr = ctx.checkpoint_path("fastrelax")
+        if fr.is_file():
+            return pd.read_pickle(fr)
+    prep = ctx.checkpoint_path("prepare_files")
+    if prep.is_file():
+        return pd.read_pickle(prep)
+    return _seed_input(ctx)
+
+
 def run_superimpose(ctx, spec) -> pd.DataFrame:
-    """Port of Superimposition._superimposition."""
+    """Port of Superimposition._superimposition (with fastrelax-aware input)."""
     from structurezyme.steps.superimposestructures_step import SuperimposeStructures
     from structurezyme.steps.save_step import Save
     from structurezyme.utils.helpers import valid_file_list
@@ -355,7 +376,7 @@ def run_superimpose(ctx, spec) -> pd.DataFrame:
     superimp_dir = _superimp_dir(ctx)
     num_threads = ctx.config.runtime.num_threads
     include_vina = ctx.config.is_enabled("vina")
-    df = _first_input(ctx, spec)
+    df = _superimpose_input(ctx, spec)
 
     output_sup_dir = superimp_dir / "superimposed_structures"
 

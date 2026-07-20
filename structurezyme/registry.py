@@ -24,7 +24,10 @@ STEPS: dict[str, StepSpec] = {
     "docking_metrics":  _spec("docking_metrics", ["boltz"], ["boltz", "vina"]),
     "prepare_files":    _spec("prepare_files", ["docking_metrics"], ["docking_metrics"]),
     "fastrelax":        _spec("fastrelax", ["prepare_files"], ["prepare_files"]),
-    "superimpose":      _spec("superimpose", ["prepare_files"], ["prepare_files"]),
+    # fastrelax is optional but, when enabled, must run *before* superimpose
+    # (superimpose consumes its relaxed frame). Declaring it in depends_on
+    # enforces the ordering; a disabled fastrelax is simply skipped at run time.
+    "superimpose":      _spec("superimpose", ["prepare_files", "fastrelax"], ["prepare_files", "fastrelax"]),
     "protein_rmsd":     _spec("protein_rmsd", ["superimpose"], ["superimpose"]),
     "ligand_rmsd":      _spec("ligand_rmsd", ["protein_rmsd"], ["protein_rmsd"]),
     "geometric_filter": _spec("geometric_filter", ["ligand_rmsd"], ["ligand_rmsd"]),
