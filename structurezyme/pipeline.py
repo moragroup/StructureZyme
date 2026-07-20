@@ -455,7 +455,16 @@ class GeometricFilters:
 
 
 class Pipeline:
-    """Full pipeline: Docking -> Superimposition -> GeometricFiltering"""
+    """Backward-compatible adapter around the modular RunConfig + Runner engine.
+
+    .. deprecated::
+        Constructing ``Pipeline(df, boltz_cache_dir=..., ...)`` still works, but
+        the legacy keyword arguments are now translated into a
+        :class:`structurezyme.config.RunConfig` and executed by
+        :class:`structurezyme.runner.Runner`.  New code should build a
+        ``RunConfig`` and call ``Runner(cfg).run()`` directly.
+    """
+
     def __init__(self,
                 df, 
                 boltz_cache_dir: str,
@@ -486,101 +495,95 @@ class Pipeline:
                 fastrelax_scorefunction: str = "ref2015",
                 ligand_resname: str = "LIG",
                 ):
-                 
-        self.df = df.copy()
-        self.boltz_cache_dir = boltz_cache_dir
-        self.max_matches = max_matches
-        self.esterase = esterase
-        self.metagenomic_enzymes = metagenomic_enzymes
-        self.skip_catalytic_residue_prediction = skip_catalytic_residue_prediction
-        self.run_vina = run_vina
-        self.alternative_structure_for_vina = alternative_structure_for_vina
-        self.use_msa_server = use_msa_server
-        self.num_threads = num_threads
-        self.squidly_dir = squidly_dir
-        self.squidly_model_size = squidly_model_size
-        self.squidly_as_threshold = squidly_as_threshold
-        self.squidly_num_threads = squidly_num_threads
-        self.run_placer = run_placer
-        self.placer_predict_ligand = placer_predict_ligand
-        self.placer_nsamples = placer_nsamples
-        self.placer_rerank = placer_rerank
-        self.placer_env_path = placer_env_path
-        self.run_fastrelax = run_fastrelax
-        self.fastrelax_mode = fastrelax_mode
-        self.fastrelax_top_k = fastrelax_top_k
-        self.fastrelax_drop_unrelaxed = fastrelax_drop_unrelaxed
-        self.fastrelax_shell_radius = fastrelax_shell_radius
-        self.fastrelax_constraint_weight = fastrelax_constraint_weight
-        self.fastrelax_scorefunction = fastrelax_scorefunction
-        self.ligand_resname = ligand_resname
-        if self.run_placer and self.placer_predict_ligand is None:
+
+        import warnings
+        from datetime import datetime
+        from structurezyme.config import (
+            RunConfig, PathsConfig, RuntimeConfig, StepsConfig, StepConfig,
+        )
+        from structurezyme.paths import run_dir, RunLayout
+
+        warnings.warn(
+            "structurezyme.pipeline.Pipeline is deprecated; build a "
+            "structurezyme.config.RunConfig and run it with "
+            "structurezyme.runner.Runner instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
+        if run_placer and placer_predict_ligand is None:
             raise ValueError(
                 "run_placer=True requires placer_predict_ligand (e.g. 'A-HEM-154')"
             )
-        self.base_output_dir = Path(base_output_dir)
-        self.base_output_dir.mkdir(exist_ok=True, parents=True)
+
+        self.df = df.copy()
+
+        # Options shared by several steps.
+        squidly_opts = dict(
+            skip_catalytic_residue_prediction=skip_catalytic_residue_prediction,
+            squidly_model_size=squidly_model_size,
+            squidly_as_threshold=squidly_as_threshold,
+            squidly_num_threads=squidly_num_threads,
+            squidly_dir=str(squidly_dir),
+        )
+        vina_opts = dict(
+            metagenomic_enzymes=metagenomic_enzymes,
+            alternative_structure_for_vina=alternative_structure_for_vina,
+        )
+        fastrelax_opts = dict(
+            fastrelax_mode=fastrelax_mode,
+            fastrelax_top_k=fastrelax_top_k,
+            fastrelax_drop_unrelaxed=fastrelax_drop_unrelaxed,
+            fastrelax_shell_radius=fastrelax_shell_radius,
+            fastrelax_constraint_weight=fastrelax_constraint_weight,
+            fastrelax_scorefunction=fastrelax_scorefunction,
+            ligand_resname=ligand_resname,
+        )
+        placer_opts = dict(
+            placer_predict_ligand=placer_predict_ligand,
+            placer_nsamples=placer_nsamples,
+            placer_rerank=placer_rerank,
+            placer_env_path=placer_env_path,
+        )
+
+        steps = StepsConfig(
+            squidly=StepConfig(enabled=True, **squidly_opts),
+            boltz=StepConfig(enabled=True, use_msa_server=use_msa_server),
+            vina=StepConfig(enabled=run_vina, **vina_opts),
+            fastrelax=StepConfig(enabled=run_fastrelax, **fastrelax_opts),
+            superimpose=StepConfig(enabled=True),
+            ligand_rmsd=StepConfig(enabled=True, max_matches=max_matches),
+            geometric_filter=StepConfig(enabled=True, esterase=esterase),
+            placer=StepConfig(enabled=run_placer, **placer_opts),
+        )
+
+        # Explicit RuntimeConfig so each Pipeline instance gets a *fresh* run_id
+        # (the RunConfig class-level default freezes run_id at import time).
+        runtime = RuntimeConfig(
+            run_id=datetime.now().strftime("%Y%m%d-%H%M%S-%f"),
+            num_threads=num_threads,
+        )
+        self.config = RunConfig(
+            paths=PathsConfig(
+                output_root=str(base_output_dir),
+                boltz_cache_dir=str(boltz_cache_dir),
+                squidly_weights_dir=str(squidly_dir) or None,
+                placer_env_path=placer_env_path,
+            ),
+            runtime=runtime,
+            steps=steps,
+        )
+
+        # Build the run layout and seed the input DataFrame so the first step
+        # (squidly) can read it from checkpoints/_input.pkl.
+        self.layout = RunLayout(run_dir(self.config.paths.output_root,
+                                        self.config.runtime.user,
+                                        self.config.runtime.run_id))
+        self.layout.create()
+        self.df.to_pickle(self.layout.checkpoint_path("_input"))
 
     def run(self):
-        # Docking
-        docking = Docking(
-            df=self.df,
-            boltz_cache_dir=self.boltz_cache_dir,
-            output_dir=Path(self.base_output_dir) / "docking",
-            squidly_dir=Path(self.squidly_dir),
-            metagenomic_enzymes=self.metagenomic_enzymes,
-            skip_catalytic_residue_prediction=self.skip_catalytic_residue_prediction,
-            run_vina=self.run_vina,
-            alternative_structure_for_vina=self.alternative_structure_for_vina,
-            use_msa_server=self.use_msa_server,
-            num_threads=self.num_threads,
-            squidly_model_size=self.squidly_model_size,
-            squidly_as_threshold=self.squidly_as_threshold,
-            squidly_num_threads=self.squidly_num_threads,
-        )
-        docking.run()
+        """Execute the run via the modular Runner (config built in __init__)."""
+        from structurezyme.runner import Runner
 
-        # Superimposition
-        superimp = Superimposition(
-            maxMatches=self.max_matches,
-            input_dir=Path(self.base_output_dir) / "docking",
-            output_dir=Path(self.base_output_dir) / "superimposition",
-            include_vina=self.run_vina,
-            num_threads=self.num_threads,
-            run_fastrelax=self.run_fastrelax,
-            fastrelax_mode=self.fastrelax_mode,
-            fastrelax_top_k=self.fastrelax_top_k,
-            fastrelax_drop_unrelaxed=self.fastrelax_drop_unrelaxed,
-            fastrelax_shell_radius=self.fastrelax_shell_radius,
-            fastrelax_constraint_weight=self.fastrelax_constraint_weight,
-            fastrelax_scorefunction=self.fastrelax_scorefunction,
-            ligand_resname=self.ligand_resname,
-        )
-        superimp.run()  
-
-        # Geometric filtering for best structure only
-        gf = GeometricFilters(
-            df=pd.read_pickle(Path(self.base_output_dir) / 'superimposition/ligandRMSD.pkl'),
-            esterase=self.esterase,
-            input_dir=Path(self.base_output_dir) / "superimposition",
-            output_dir=Path(self.base_output_dir) / "geometricfiltering",
-            num_threads=self.num_threads,
-        )
-        gf.run()
-
-        # PLACER pose prediction (opt-in)
-        if self.run_placer:
-            from structurezyme.steps.PLACER_step import PLACER
-            geo_pkl = Path(self.base_output_dir) / "geometricfiltering" / "structural_features_final.pkl"
-            df_geo = pd.read_pickle(geo_pkl)
-            placer = PLACER(
-                preparedfiles_dir=Path(self.base_output_dir) / "superimposition" / "preparedfiles_for_superimposition",
-                output_dir=Path(self.base_output_dir) / "placer",
-                predict_ligand=self.placer_predict_ligand,
-                placer_env_path=self.placer_env_path,
-                nsamples=self.placer_nsamples,
-                rerank=self.placer_rerank,
-                num_threads=self.num_threads,
-            )
-            df_placer = placer.execute(df_geo)
-            df_placer.to_pickle(geo_pkl)
+        Runner(self.config).run()
