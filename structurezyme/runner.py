@@ -79,7 +79,17 @@ class Runner:
             return True, "SKIPPED_CHECKPOINT"
         return False, ""
 
-    def run(self) -> None:
+    def run(self, stop_after: str | None = None) -> None:
+        """Execute the pipeline in dependency order.
+
+        Args:
+            stop_after: If given, halt the loop after this step has been
+                processed (executed or skipped). Used by the CLI's ``step``
+                command to run a single module without touching anything
+                downstream of it. ``None`` runs the full pipeline.
+        """
+        if stop_after is not None and stop_after not in STEPS:
+            raise KeyError(f"Unknown step {stop_after!r}; have {list(STEPS)}")
         for name in ordered_steps():
             spec = STEPS[name]
             skip, reason = self._should_skip(name, spec)
@@ -90,6 +100,8 @@ class Runner:
                     # Overwriting it would flip status away from "OK" and cause
                     # _should_skip to re-run the step on the next invocation,
                     # defeating resumability for every run after the second.
+                    if name == stop_after:
+                        break
                     continue
                 # SKIPPED_DISABLED: no OK record to preserve; flag it explicitly.
                 self.manifest.set(name, StepRecord(
@@ -99,6 +111,8 @@ class Runner:
                     input_hash=hash_files(self._existing_input_paths(spec)),
                 ))
                 self.manifest.save(self.layout.manifest_path)
+                if name == stop_after:
+                    break
                 continue
 
             self.logger.info(f"RUN: {name}")
@@ -128,3 +142,5 @@ class Runner:
                 self.manifest.save(self.layout.manifest_path)
                 self.logger.error(f"FAILED: {name}: {exc!r}")
                 raise
+            if name == stop_after:
+                break

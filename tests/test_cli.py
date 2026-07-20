@@ -50,3 +50,36 @@ def test_run_missing_required_config_exits_nonzero():
     with pytest.raises(SystemExit) as exc:
         main(["run"])
     assert exc.value.code != 0
+
+class _FakeRunner:
+    last = {}
+    def __init__(self, cfg):
+        _FakeRunner.last["cfg"] = cfg
+    def run(self, stop_after=None):
+        _FakeRunner.last["stop_after"] = stop_after
+
+def _write_min_run_dir(tmp_path):
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    from structurezyme.config import RunConfig
+    RunConfig(paths={"output_root": str(run_dir), "boltz_cache_dir": str(run_dir / "c")}
+              ).write(run_dir / "config.yml")
+    return run_dir
+
+def test_step_default_stops_after_named_module(tmp_path, monkeypatch):
+    import structurezyme.cli as cli
+    monkeypatch.setattr(cli, "Runner", _FakeRunner)
+    run_dir = _write_min_run_dir(tmp_path)
+    rc = main(["step", "prepare_files", "--run-dir", str(run_dir)])
+    assert rc == 0
+    assert _FakeRunner.last["stop_after"] == "prepare_files"
+    assert "prepare_files" in _FakeRunner.last["cfg"].runtime.force
+
+def test_step_continue_runs_full_pipeline(tmp_path, monkeypatch):
+    import structurezyme.cli as cli
+    monkeypatch.setattr(cli, "Runner", _FakeRunner)
+    run_dir = _write_min_run_dir(tmp_path)
+    rc = main(["step", "prepare_files", "--run-dir", str(run_dir), "--continue"])
+    assert rc == 0
+    assert _FakeRunner.last["stop_after"] is None
+    assert "prepare_files" in _FakeRunner.last["cfg"].runtime.force

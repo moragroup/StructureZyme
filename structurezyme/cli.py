@@ -40,7 +40,11 @@ def cmd_step(args) -> int:
     layout = RunLayout(args.run_dir)
     cfg = load_config(layout.config_path)
     cfg.runtime.force = list(set(cfg.runtime.force) | {args.name})
-    Runner(cfg).run()
+    # Default: run ONLY the named module and stop (stop_after). With
+    # --continue, run the module and let the rest of the pipeline follow,
+    # recomputing any downstream step whose inputs changed.
+    stop_after = None if args.cont else args.name
+    Runner(cfg).run(stop_after=stop_after)
     return 0
 
 
@@ -78,6 +82,9 @@ def build_parser() -> argparse.ArgumentParser:
     pst = sub.add_parser("step")
     pst.add_argument("name")
     pst.add_argument("--run-dir", required=True)
+    pst.add_argument("--continue", dest="cont", action="store_true",
+                     help="Also run downstream steps after NAME (recomputing "
+                          "any whose inputs changed). Default runs only NAME.")
     pst.set_defaults(func=cmd_step)
 
     pstat = sub.add_parser("status")
