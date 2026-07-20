@@ -3,7 +3,7 @@ import getpass
 from datetime import datetime
 from pathlib import Path
 import yaml
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 class StepConfig(BaseModel):
     model_config = ConfigDict(extra="allow")
@@ -27,8 +27,8 @@ class StepsConfig(BaseModel):
     placer: StepConfig = StepConfig(enabled=False)
 
 class PathsConfig(BaseModel):
-    output_root: str
-    boltz_cache_dir: str
+    output_root: str = ""
+    boltz_cache_dir: str = ""
     squidly_weights_dir: str | None = None
     placer_env_path: str = "/mnt/labs/data/mora/software/PLACER/env"
 
@@ -42,6 +42,18 @@ class RunConfig(BaseModel):
     paths: PathsConfig
     runtime: RuntimeConfig = RuntimeConfig()
     steps: StepsConfig = StepsConfig()
+
+    @model_validator(mode="after")
+    def _require_core_paths(self):
+        missing = [n for n in ("output_root", "boltz_cache_dir")
+                   if not getattr(self.paths, n)]
+        if missing:
+            raise ValueError(
+                f"RunConfig.paths missing required path(s): {', '.join(missing)}. "
+                "Set them explicitly or apply a host profile via "
+                "structurezyme.hosts.apply_host_defaults."
+            )
+        return self
 
     def _step(self, name: str) -> StepConfig:
         return getattr(self.steps, name)
