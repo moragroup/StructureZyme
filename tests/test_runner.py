@@ -96,3 +96,65 @@ def test_stop_after_unknown_step_raises(tmp_path, monkeypatch):
     cfg = _cfg(tmp_path)
     with pytest.raises(KeyError):
         Runner(cfg).run(stop_after="not_a_step")
+
+
+# --------------------------------------------------------------------------
+# Optional steps (vina / fastrelax / placer) wiring through the DAG.
+# These are disabled by default; verify they are fully integrated: when
+# enabled they run in dependency order and deliver their frames to the
+# consumers that declare them as optional inputs, and when disabled the
+# pipeline degrades gracefully (they are skipped, downstream still runs).
+# --------------------------------------------------------------------------
+def _record_runner():
+    """Fake runner recording call order + which input frames each step saw."""
+    calls = []
+    seen_inputs = {}
+    def fake_runner(ctx, spec):
+        calls.append(spec.name)
+        # Names of upstream steps whose checkpoint frames were available.
+        frames = ctx.input_frames(spec)
+        seen_inputs[spec.name] = [f["Entry"].iloc[0] for f in frames]
+        return pd.DataFrame({"Entry": [spec.name]})
+    return calls, seen_inputs, fake_runner
+
+def test_all_optional_steps_enabled_run_in_order_with_inputs(tmp_path, monkeypatch):
+    calls, seen, fake = _record_runner()
+    for spec in registry.STEPS.values():
+        monkeypatch.setattr(spec, "runner", fake, raising=False)
+    cfg = _cfg(tmp_path)
+    cfg.steps.vina.enabled = True
+    cfg.steps.fastrelax.enabled = True
+    cfg.steps.placer.enabled = True
+
+    Runner(cfg).run()
+
+    # All 15 steps ran, including the three optional ones.
+    for name in ("vina", "fastrelax", "placer"):
+        assert name in calls, f"{name} did not run when enabled"
+    # Dependency ordering honored.
+    assert calls.index("vina") < calls.index("docking_metrics")
+    assert calls.index("fastrelax") < calls.index("superimpose")
+    assert calls.index("plip") < calls.index("placer")
+    # Consumers received their optional inputs:
+    # docking_metrics declares inputs [boltz, vina] -> both present.
+    assert "vina" in seen["docking_metrics"] and "boltz" in seen["docking_metrics"]
+    # superimpose declares inputs [prepare_files, fastrelax] -> both present.
+    assert "fastrelax" in seen["superimpose"] and "prepare_files" in seen["superimpose"]
+
+def test_all_optional_steps_disabled_degrade_gracefully(tmp_path, monkeypatch):
+    calls, seen, fake = _record_runner()
+    for spec in registry.STEPS.values():
+        monkeypatch.setattr(spec, "runner", fake, raising=False)
+    cfg = _cfg(tmp_path)  # defaults: vina/fastrelax/placer disabled
+
+    Runner(cfg).run()
+
+    m = Runner(cfg).manifest
+    for name in ("vina", "fastrelax", "placer"):
+        assert name not in calls, f"{name} ran while disabled"
+        assert m.get(name).status == "SKIPPED_DISABLED"
+    # Downstream consumers still ran, using only their present inputs.
+    assert "docking_metrics" in calls
+    assert seen["docking_metrics"] == ["boltz"], "vina absent -> only boltz frame"
+    assert "superimpose" in calls
+    assert seen["superimpose"] == ["prepare_files"], "fastrelax absent -> only prepare_files"
