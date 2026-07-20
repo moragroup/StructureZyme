@@ -1,50 +1,92 @@
-# Filterzyme
+# StructureZyme
 
-Structural filtering pipeline using docking and active site heuristics to prioritize ML-predicted enzyme variants for experimental validation. 
-This tool processes superimposed ligand poses and filters them using geometric criteria such as distances, angles, and optionally, esterase-specific filters or nucleophilic proximity.
+Structural filtering pipeline using docking and active-site heuristics to prioritize
+ML-predicted enzyme variants for experimental validation. StructureZyme predicts enzyme
+structures (Chai / Boltz), docks substrates, and filters the resulting poses using
+geometric criteria such as distances, angles, and optionally esterase-specific filters or
+nucleophilic proximity.
+
+StructureZyme is driven by a **YAML config + CLI** front end backed by a modular,
+resumable runner. A backward-compatible programmatic API is also provided.
 
 ---
 
 ## Features
 
-- Analysis of enzyme-ligand docking using multiple docking tools (ML- and physics-based).
-- Optional catalytic nucleophile-focused analysis for esterases or other enzymes with nucleophilic catalytic residues. 
+- Structure prediction with multiple tools (Chai, Boltz), writing **mmCIF (`.cif`)** models.
+- Enzyme–ligand docking analysis using both ML- and physics-based tools.
+- Optional catalytic-nucleophile-focused analysis for esterases and other enzymes with
+  nucleophilic catalytic residues.
 - Optional Vina docking for enzymes with known active sites.
-- User-friendly pipeline using a DataFrame as input with ligand SMILES strings.
+- Config-driven, checkpointed pipeline: resume after a crash, re-run individual steps, and
+  submit to Slurm.
 
 ---
 
-## Quick Start
-
-For full installation instructions, see [docs/getting_started.md](docs/getting_started.md).
+## Installation
 
 ```bash
-conda create --name filterzyme python=3.11 pip -y
-conda activate filterzyme
-git clone https://github.com/MoraGroup/Filterzyme.git
-cd Filterzyme
+conda env create -f environment.yml
+conda activate structurezyme
 python setup.py sdist bdist_wheel
-pip install dist/filterzyme-0.0.6.tar.gz --use-deprecated=legacy-resolver
+pip install dist/structurezyme-0.1.0.tar.gz --use-deprecated=legacy-resolver
 pip install enzymetk==0.0.8
-pip install squidly
-python -c "import squidly, os; os.system(f'python {os.path.dirname(squidly.__file__)}/download_models_hf.py')"
 ```
 
-> **Catalytic-residue prediction requires the `squidly` CLI** (installed above).
-> The model weights are downloaded from HuggingFace on first setup. See
-> [`1_analysis-planning/3_setup-sanity-check/10_squidly_install.md`](1_analysis-planning/3_setup-sanity-check/10_squidly_install.md)
-> for details and troubleshooting. ESM2 inference requires a GPU.
+> **Catalytic-residue prediction requires the `squidly` CLI** (installed via
+> `environment.yml`). The model weights are downloaded from HuggingFace on first setup.
+> ESM2 inference requires a GPU.
 
-### Download Boltz cache
+For full installation instructions and troubleshooting, see
+[docs/getting_started.md](docs/getting_started.md).
+
+---
+
+## Quick Start (CLI)
 
 ```bash
-boltz predict example.yml --cache /path/to/your/boltz/cache/
+# 1. Generate a config template
+structurezyme init --output run.yml
+# 2. Edit run.yml (set output_root, boltz_cache_dir, enable/disable steps)
+# 3. Run the pipeline
+structurezyme run --config run.yml
+# 4. Inspect progress / resume after a crash
+structurezyme status --run-dir /path/to/output_root/<user>/<run_id>
+structurezyme resume --run-dir /path/to/output_root/<user>/<run_id>
 ```
 
-### Run the pipeline
+### CLI commands
+
+| Command | Description |
+|---------|-------------|
+| `structurezyme init --output run.yml` | Write a template config file. |
+| `structurezyme run --config run.yml [--host HOST] [--force S1,S2]` | Run the pipeline. `--force` recomputes the named steps. |
+| `structurezyme resume --run-dir DIR` | Resume an interrupted run from its checkpoints. |
+| `structurezyme step NAME --run-dir DIR [--continue]` | Re-run a single step. With `--continue`, also run downstream steps whose inputs changed. |
+| `structurezyme status --run-dir DIR` | Show per-step status and wall time. |
+| `structurezyme submit --config run.yml [--host --job-name --partition --gpus --time --dry-run]` | Render/submit a Slurm job (`--dry-run` prints the script). |
+
+Structure-prediction steps (Chai/Boltz) emit **mmCIF (`.cif`)** files; PDB files are only
+produced by the downstream prepare/clean step consumed by the geometric filters.
+
+---
+
+## Programmatic API
+
+Preferred (modular) API:
 
 ```python
-from filterzyme.pipeline_v2 import Pipeline
+from structurezyme.config import load_config
+from structurezyme.runner import Runner
+
+cfg = load_config("run.yml")
+Runner(cfg).run()
+```
+
+A backward-compatible `Pipeline` adapter is still available for existing scripts:
+
+```python
+from structurezyme.pipeline import Pipeline
 import pandas as pd
 
 df = pd.DataFrame({
@@ -55,42 +97,20 @@ df = pd.DataFrame({
     'substrate_moiety': ['[C](=O)([O])([O])'],
 })
 
-pipeline = Pipeline(
-    df=df,
-    boltz_cache_dir="/path/to/boltz/cache",
-    base_output_dir="pipeline_output"
-)
+pipeline = Pipeline(df=df, boltz_cache_dir="/path/to/boltz/cache")
 pipeline.run()
 ```
 
-By default the pipeline predicts catalytic residues with Squidly (ESM2 3B
-ensemble) before docking. To select the larger ESM2 backbone, pass
-`squidly_model_size='15B'` (~40 GB VRAM). To skip catalytic-residue
-prediction entirely (e.g. for de-novo enzymes where it is unreliable), pass
-`skip_catalytic_residue_prediction=True`.
-
-### Running with Vina
-
-To enable Vina docking (for non-de-novo enzymes with known active sites):
-
-```python
-pipeline = Pipeline(
-    df=df,
-    boltz_cache_dir="/path/to/boltz/cache",
-    run_vina=True,
-    alternative_structure_for_vina='Chai',
-    base_output_dir="pipeline_output"
-)
-pipeline.run()
-```
-
-Vina requires the `docko` package: `pip install docko`
+> **Migration note:** legacy imports such as `from filterzyme.pipeline import Pipeline`
+> still work via a deprecation shim that re-exports `structurezyme`, but emit a
+> `DeprecationWarning` and will be removed in a future release. Update imports to
+> `structurezyme`.
 
 ---
 
 ## Input DataFrame Schema
 
-The input pandas **DataFrame** must include:  
+When using the `Pipeline` adapter, the input pandas **DataFrame** must include:
 - `Entry` -- unique identifier for each enzyme and substrate pair
 - `Sequence` -- amino acid sequence of the enzyme
 - `substrate_name` -- name of the substrate
@@ -108,20 +128,13 @@ If cofactors are included, add:
 
 - [Getting Started](docs/getting_started.md) -- Installation and setup
 - [Pipeline Overview](docs/pipeline_overview.md) -- Architecture and design
+- [Configuration](docs/configuration.md) -- Config file reference
+- [Resume & Checkpoints](docs/resume_and_checkpoints.md) -- Recovering and re-running steps
+- [Multi-user Runs](docs/multi_user.md) -- Shared output roots and per-user run dirs
 - [API Reference](docs/api_reference.md) -- Full parameter documentation
-- [Examples](docs/examples/) -- Working example scripts
 
 ---
 
-## Examples
+## Repository
 
-| Script | Description |
-|--------|-------------|
-| [`00_quickstart.py`](docs/examples/00_quickstart.py) | Minimal 1-sequence example (Chai + Boltz) |
-| [`01_docking.py`](docs/examples/01_docking.py) | Docking phase only |
-| [`02_superimposition.py`](docs/examples/02_superimposition.py) | Superimposition phase only |
-| [`03_geometric_filtering.py`](docs/examples/03_geometric_filtering.py) | Geometric filtering only |
-| [`04_full_pipeline.py`](docs/examples/04_full_pipeline.py) | Full pipeline with optional Vina |
-| [`05_cofactor_example.py`](docs/examples/05_cofactor_example.py) | Pipeline with cofactor moieties |
-
-All examples use argparse for configurable paths (no hardcoded paths). Run any example with `--help` for options.
+Source and issues: <https://github.com/moragroup/StructureZyme>
