@@ -106,7 +106,6 @@ def test_seed_raises_on_missing_enabled_column(tmp_path):
     assert "vina" in str(e.value) and "vina_residues" in str(e.value)
 
 
-import yaml
 from structurezyme.cli import _template
 
 
