@@ -151,19 +151,27 @@ def run_squidly(ctx, spec) -> pd.DataFrame:
 
         df_squidly[col] = df_squidly[col].apply(_norm)
 
-    mask_empty = (df_squidly["Squidly_CR_Position"] == "") & (df_squidly["vina_residues"] == "")
-    empty_entries = df_squidly.loc[mask_empty, "Entry"].tolist()
-    if empty_entries:
-        log_boxed_note(
-            "Removing entries without catalytic residues and without specified "
-            "residues for vina docking: " + ", ".join(empty_entries)
-        )
-    df_squidly = df_squidly[~mask_empty].reset_index(drop=True)
-
     use_vina = df_squidly["vina_residues"] != ""
     df_squidly["catalytic_residues"] = df_squidly["vina_residues"].where(
         use_vina, df_squidly["Squidly_CR_Position"]
     )
+
+    # Enzymes without a canonical catalytic triad (and without user-specified
+    # vina_residues) get an empty ``catalytic_residues``. We KEEP these rows:
+    # chai/boltz co-fold the protein+ligand without needing residues, and the
+    # downstream analysis (docking_metrics, superimposition, RMSD, geometric
+    # filter, fpocket, SASA, PLIP) runs on those co-folded poses. Only vina is
+    # skipped per-row for them (see run_vina), since it needs residues to place
+    # its docking box. We notify the user which entries took this path.
+    mask_empty = df_squidly["catalytic_residues"] == ""
+    empty_entries = df_squidly.loc[mask_empty, "Entry"].tolist()
+    if empty_entries:
+        log_boxed_note(
+            "No catalytic residues found (and no vina_residues specified) for: "
+            + ", ".join(empty_entries)
+            + ". These entries will be co-folded by chai/boltz and analysed "
+            "downstream, but vina docking is skipped for them."
+        )
 
     df_squidly.to_pickle(out_dir / "squidly.pkl")
     return df_squidly
@@ -242,6 +250,31 @@ def run_vina(ctx, spec) -> pd.DataFrame:
     vina_dir.mkdir(exist_ok=True, parents=True)
     delete_empty_subdirs(vina_dir)
 
+    # Per-row vina skip: vina needs catalytic_residues to place its docking box.
+    # Rows with no residues (enzymes squidly found no catalytic triad for, and
+    # with no user-specified vina_residues) are set aside here -- vina is not
+    # run for them. They keep their chai_dir/boltz_dir and rejoin the frame at
+    # the end with vina_dir = NaN, so docking_metrics falls back to the boltz
+    # co-folded pose and the rest of the pipeline proceeds. See run_squidly.
+    if "catalytic_residues" in df_boltz.columns:
+        has_residues = df_boltz["catalytic_residues"].fillna("").astype(str).str.strip() != ""
+    else:
+        has_residues = pd.Series(True, index=df_boltz.index)
+    df_skipped = df_boltz[~has_residues].copy()
+    df_boltz = df_boltz[has_residues].reset_index(drop=True)
+    if len(df_skipped):
+        log_boxed_note(
+            "Skipping vina docking (no catalytic residues) for: "
+            + ", ".join(df_skipped["Entry"].astype(str).tolist())
+            + ". These entries proceed with chai/boltz co-folded poses."
+        )
+
+    if len(df_boltz) == 0:
+        # Nobody has residues -- vina does nothing; every row passes through.
+        df_skipped["vina_dir"] = pd.NA
+        df_skipped.to_pickle(out_dir / "vina.pkl")
+        return df_skipped
+
     if metagenomic_enzymes == 1:
         if alt == "Chai":
             log_boxed_note("Fallback to Chai structures for docking due to missing AF2 structures.")
@@ -289,6 +322,13 @@ def run_vina(ctx, spec) -> pd.DataFrame:
         df_vina_combined.drop(columns=["vina_dir_missing"], inplace=True)
         df_vina = df_vina_combined.copy()
 
+    # Rejoin the residue-less rows (vina_dir = NaN) so the full enzyme set flows
+    # downstream. concat aligns on columns; skipped rows simply lack vina_dir.
+    if len(df_skipped):
+        if "vina_dir" not in df_skipped.columns:
+            df_skipped["vina_dir"] = pd.NA
+        df_vina = pd.concat([df_vina, df_skipped], ignore_index=True)
+
     df_vina.to_pickle(out_dir / "vina.pkl")
     return df_vina
 
@@ -313,8 +353,15 @@ def run_docking_metrics(ctx, spec) -> pd.DataFrame:
     else:
         df = _seed_input(ctx).copy()
 
+    # Keep any row that has a usable docked structure. With per-row vina skip
+    # (see run_vina), a row may legitimately have vina_dir = NaN but a valid
+    # boltz_dir co-folded pose; such rows must survive. Rows with neither are
+    # genuine failures and are dropped.
     if run_vina and "vina_dir" in df.columns:
-        df = df[df["vina_dir"].notna()].copy()
+        keep = df["vina_dir"].notna()
+        if "boltz_dir" in df.columns:
+            keep = keep | df["boltz_dir"].notna()
+        df = df[keep].copy()
     else:
         df = df[df["boltz_dir"].notna()].copy()
 
