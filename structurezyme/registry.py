@@ -50,3 +50,18 @@ def ordered_steps() -> list[str]:
     for name in STEPS:
         visit(name)
     return order
+
+
+from . import step_runners as _sr  # noqa: E402
+
+_RUNNERS = {
+    "squidly": _sr.run_squidly, "chai": _sr.run_chai, "boltz": _sr.run_boltz,
+    "vina": _sr.run_vina, "docking_metrics": _sr.run_docking_metrics,
+    "prepare_files": _sr.run_prepare_files, "fastrelax": _sr.run_fastrelax,
+    "superimpose": _sr.run_superimpose, "protein_rmsd": _sr.run_protein_rmsd,
+    "ligand_rmsd": _sr.run_ligand_rmsd, "geometric_filter": _sr.run_geometric_filter,
+    "fpocket": _sr.run_fpocket, "ligand_sasa": _sr.run_ligand_sasa,
+    "plip": _sr.run_plip, "placer": _sr.run_placer,
+}
+for _name, _fn in _RUNNERS.items():
+    STEPS[_name].runner = _fn
