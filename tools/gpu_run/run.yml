@@ -17,8 +17,17 @@ paths:
 runtime:
   user: lherrmann
   run_id: gpu-allmodules-01
-  num_threads: 8
-  force: []
+  # NOTE: keep at 1. The external enzymetk Boltz/docking steps np.array_split the
+  # input frame across threads and then assign per-pose outputs back column-wise;
+  # with a single input row and num_threads > 1 this raises
+  # "Length of values (N) does not match length of index (1)". One thread is also
+  # fine perf-wise for a single enzyme. Increase only for many-row inputs.
+  num_threads: 1
+  # protein_rmsd's earlier checkpoint was produced before the _relaxed
+  # tool-name fix, so its `tool` column is corrupt ('relaxed' for every pose).
+  # Force it to re-run; downstream steps re-run automatically via input-hash
+  # invalidation once protein_rmsd's output changes. Remove once re-run.
+  force: [protein_rmsd]
 steps:
   squidly:
     enabled: true

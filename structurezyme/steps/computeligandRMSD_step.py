@@ -79,7 +79,13 @@ def get_tool_from_structure_name(structure_name: str) -> str:
     """
     Extracts the docking tool name from a structure string (e.g., 'Q97WW0_1_vina' -> 'vina').
     Assumes the tool is the last segment after the last underscore.
+
+    fastrelax appends a '_relaxed' suffix to pose filenames
+    (fastrelax_step.py:266), so 'P41365_0_chai_relaxed' must still resolve to
+    'chai'. Strip a trailing '_relaxed' before taking the last token.
     """
+    if structure_name.endswith('_relaxed'):
+        structure_name = structure_name[:-len('_relaxed')]
     if '_' in structure_name:
         return structure_name.split('_')[-1]
     return "UNKNOWN_tool" # Fallback if format doesn't match
