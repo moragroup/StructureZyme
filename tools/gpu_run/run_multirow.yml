@@ -1,0 +1,63 @@
+# Multi-row all-modules StructureZyme run config (3 enzymes).
+#
+# Validates N>1 handling: per-row iteration, N-vs-N RMSD matrices, tool
+# detection, the per-row cofactor conditional in geometric_filter (CalB has no
+# cofactor, both FMOs use FAD), and the fail-loud missing-PDB guards.
+#
+# output_root / boltz_cache_dir / squidly_weights_dir / placer_env_path are
+# left empty and filled from the `default` host profile at run time via
+# `run --host default`. input_csv points at the 3-row pickle produced by
+# tools/gpu_run/make_input_multirow.py.
+paths:
+  output_root: ''
+  boltz_cache_dir: ''
+  squidly_weights_dir: null
+  input_csv: tools/gpu_run/input_multirow.pkl
+runtime:
+  user: lherrmann
+  run_id: gpu-multirow-01
+  # KEEP at 1. The external enzymetk Boltz/Chai steps np.array_split the input
+  # frame across threads and assign per-pose outputs back by position; with
+  # num_threads > 1 this either crashes (rows < threads) or stores list-wrapped
+  # cell values (rows == threads). One thread is correct for any row count.
+  num_threads: 1
+  force: []
+steps:
+  squidly:
+    enabled: true
+    # as_threshold left unset -> squidly uses its own calibrated default to
+    # pick catalytic residues. vina_residues is empty in the input, so vina
+    # docks at squidly's predicted residues (full auto squidly->vina path).
+  chai:
+    enabled: true
+  boltz:
+    enabled: true
+  vina:
+    enabled: true
+  docking_metrics:
+    enabled: true
+  prepare_files:
+    enabled: true
+  fastrelax:
+    enabled: true
+    fastrelax_top_k: 2
+    fastrelax_mode: ligand_focused
+  superimpose:
+    enabled: true
+  protein_rmsd:
+    enabled: true
+  ligand_rmsd:
+    enabled: true
+  geometric_filter:
+    enabled: true
+  fpocket:
+    enabled: true
+  ligand_sasa:
+    enabled: true
+  plip:
+    enabled: true
+  placer:
+    enabled: true
+    placer_predict_ligand: LIG
+    placer_nsamples: 50
+    placer_rerank: prmsd

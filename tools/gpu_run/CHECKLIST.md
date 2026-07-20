@@ -70,3 +70,67 @@ steps are skipped via their checkpoints:
 ```bash
 structurezyme resume --run-dir /mnt/labs/data/mora/structurezyme_runs/lherrmann/gpu-allmodules-01
 ```
+
+---
+
+# Multi-Row Validation Run (3 enzymes)
+
+Validates N>1 handling: per-row iteration, N-vs-N RMSD matrices, tool
+detection, the per-row cofactor conditional in `geometric_filter`, and the
+fail-loud missing-PDB guards.
+
+## Rows
+- `P41365` — CalB (esterase), substrate ethyl acetate, **no cofactor**.
+- `F5SYD3` — flavin-dependent monooxygenase, substrate indole, **FAD cofactor**.
+- `A0A410H4M7` — flavin-dependent monooxygenase, substrate indole, **FAD cofactor**.
+
+## Files (in `tools/gpu_run/`)
+- `make_input_multirow.py` — builds `input_multirow.pkl` (the 3 rows above).
+- `run_multirow.yml` — all-15-modules config; `run_id: gpu-multirow-01`;
+  `num_threads: 1` (mandatory — see note below).
+- `run_multirow.sbatch` — Slurm launch script (24 h budget for 3 enzymes).
+
+## Design choices
+- `vina_residues` empty for all rows → squidly predicts catalytic residues
+  (`as_threshold` unset → squidly self-calibrates), then vina docks there.
+  Tests the full auto squidly→vina path.
+- `substrate_moiety` / `cofactor_moiety` empty → `geometric_filter` uses the
+  whole-ligand centroid (plumbing validation, not exact geometry).
+
+## Why num_threads must stay 1
+The external enzymetk Boltz/Chai steps `np.array_split(df, num_threads)` and
+assign per-pose outputs back by position. With `num_threads > 1` this crashes
+when rows < threads and stores list-wrapped cell values when rows == threads.
+`num_threads: 1` is correct for any row count.
+
+## Submit
+```bash
+cd <repo root>
+sbatch tools/gpu_run/run_multirow.sbatch
+```
+
+## Pre-flight (already verified on CPU by the controller)
+- [x] `run_multirow.yml` loads; all 15 steps enabled; `num_threads=1`.
+- [x] `input_multirow.pkl` has 3 rows and every required column
+      (`missing_input_columns` returns none).
+- [x] Full test suite: 143 passed, 3 skipped.
+
+## After it finishes — paste back for verification
+Run dir: `/mnt/labs/data/mora/structurezyme_runs/lherrmann/gpu-multirow-01`
+1. `structurezyme status --run-dir <run dir>` (manifest: all 15 `OK`).
+2. `ls -1 <run dir>/checkpoints`.
+3. `tail -60 <run dir>/logs/structurezyme.log`.
+4. For a per-row sanity check, paste the final geometric/analysis frame so we
+   can confirm **3 rows survived** and that CalB has empty cofactor distance
+   while the two FMOs have populated cofactor distances:
+   ```bash
+   python -c "import pandas as pd; d=pd.read_pickle('<run dir>/geometricfiltering/structural_features_final.pkl'); print(len(d)); print(d[['Entry','distance_ligand_to_cofactor']].to_string())"
+   ```
+
+## What "pass" looks like
+- Manifest: all 15 steps `OK`, none `FAILED`.
+- 3 rows persist through docking → analysis (unless squidly legitimately drops
+  a row with no predicted residues — that is logged, not silent).
+- Per-row cofactor conditional holds: CalB empty cofactor distance; FMOs
+  populated.
+- No silent empties from the analysis steps (fail-loud guards active).
