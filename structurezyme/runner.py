@@ -105,6 +105,27 @@ class Runner:
             return True, "SKIPPED_CHECKPOINT"
         return False, ""
 
+    def _seed_and_validate(self) -> None:
+        """Seed checkpoints/_input.pkl from config.paths.input_csv (once) and
+        validate that enabled modules' required input columns are present.
+
+        Resume-safe: if the seed pickle already exists it is left untouched so
+        downstream input hashes stay stable.
+        """
+        seed = self.layout.checkpoint_path("_input")
+        if seed.is_file():
+            df = pd.read_pickle(seed)
+        else:
+            df = _load_input_frame(self.config.paths.input_csv)
+            df.to_pickle(seed)
+        enabled = {n for n in STEPS if self.config.is_enabled(n)}
+        miss = missing_input_columns(df, enabled)
+        if miss:
+            parts = [f"{g} needs {cols}" for g, cols in miss.items()]
+            raise ValueError(
+                "Input is missing required column(s): " + "; ".join(parts)
+            )
+
     def run(self, stop_after: str | None = None) -> None:
         """Execute the pipeline in dependency order.
 
@@ -114,6 +135,7 @@ class Runner:
                 command to run a single module without touching anything
                 downstream of it. ``None`` runs the full pipeline.
         """
+        self._seed_and_validate()
         if stop_after is not None and stop_after not in STEPS:
             raise KeyError(f"Unknown step {stop_after!r}; have {list(STEPS)}")
         for name in ordered_steps():

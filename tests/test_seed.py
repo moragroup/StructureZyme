@@ -55,3 +55,52 @@ def test_missing_columns_geometric_filter():
     df = pd.DataFrame({"Sequence": ["M"], "substrate_smiles": ["C"], "Entry": ["P1"]})
     miss = missing_input_columns(df, enabled={"geometric_filter"})
     assert miss.get("geometric_filter") == ["substrate_moiety"]
+
+
+from structurezyme.config import RuntimeConfig, StepsConfig, StepConfig
+from structurezyme.runner import Runner
+
+
+def _runner_cfg(tmp_path, input_csv, **steps):
+    return RunConfig(
+        paths=PathsConfig(output_root=str(tmp_path / "out"),
+                          boltz_cache_dir=str(tmp_path / "bcache"),
+                          input_csv=str(input_csv)),
+        runtime=RuntimeConfig(user="u", run_id="r1"),
+        steps=StepsConfig(**steps),
+    )
+
+
+def _base_csv(tmp_path):
+    p = tmp_path / "in.csv"
+    # substrate_moiety is included because geometric_filter is enabled by
+    # default in StepsConfig; without it, column validation would fail before
+    # these tests can exercise the seeding behaviour they target.
+    pd.DataFrame({"Sequence": ["M"], "substrate_smiles": ["C"], "Entry": ["P1"],
+                  "substrate_moiety": ["C"]}).to_csv(p, index=False)
+    return p
+
+
+def test_seed_writes_input_pkl(tmp_path):
+    r = Runner(_runner_cfg(tmp_path, _base_csv(tmp_path)))
+    r._seed_and_validate()
+    seed = r.layout.checkpoint_path("_input")
+    assert seed.is_file()
+    assert list(pd.read_pickle(seed)["Entry"]) == ["P1"]
+
+
+def test_seed_does_not_clobber_existing(tmp_path):
+    r = Runner(_runner_cfg(tmp_path, _base_csv(tmp_path)))
+    seed = r.layout.checkpoint_path("_input")
+    pd.DataFrame({"Sequence": ["X"], "substrate_smiles": ["N"], "Entry": ["KEEP"],
+                  "substrate_moiety": ["N"]}).to_pickle(seed)
+    r._seed_and_validate()
+    assert list(pd.read_pickle(seed)["Entry"]) == ["KEEP"]
+
+
+def test_seed_raises_on_missing_enabled_column(tmp_path):
+    cfg = _runner_cfg(tmp_path, _base_csv(tmp_path), vina=StepConfig(enabled=True))
+    r = Runner(cfg)
+    with pytest.raises(ValueError) as e:
+        r._seed_and_validate()
+    assert "vina" in str(e.value) and "vina_residues" in str(e.value)
