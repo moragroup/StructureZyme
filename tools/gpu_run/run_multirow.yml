@@ -15,7 +15,7 @@ paths:
   input_csv: tools/gpu_run/input_multirow.pkl
 runtime:
   user: lherrmann
-  run_id: gpu-multirow-01
+  run_id: gpu-multirow-02
   # KEEP at 1. The external enzymetk Boltz/Chai steps np.array_split the input
   # frame across threads and assign per-pose outputs back by position; with
   # num_threads > 1 this either crashes (rows < threads) or stores list-wrapped
@@ -25,9 +25,18 @@ runtime:
 steps:
   squidly:
     enabled: true
-    # as_threshold left unset -> squidly uses its own calibrated default to
-    # pick catalytic residues. vina_residues is empty in the input, so vina
-    # docks at squidly's predicted residues (full auto squidly->vina path).
+    # vina_residues is empty in the input, so vina docks at squidly's predicted
+    # residues (full auto squidly->vina path).
+    #
+    # Ensemble residue selection keeps residues where mean_prob > squidly_mean_prob
+    # AND variance < squidly_mean_var (squidly `run` defaults: 0.6 / 0.225).
+    # The two flavin monooxygenases (F5SYD3, A0A410H4M7) lack a canonical
+    # catalytic triad, so at the defaults squidly predicted zero residues and
+    # both rows were dropped (only CalB survived gpu-multirow-01). Lower the
+    # probability threshold and raise the variance tolerance to retain
+    # lower-confidence residues so all 3 rows flow through docking/RMSD.
+    squidly_mean_prob: 0.3
+    squidly_mean_var: 0.4
   chai:
     enabled: true
   boltz:

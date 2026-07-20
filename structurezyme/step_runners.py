@@ -124,6 +124,12 @@ def run_squidly(ctx, spec) -> pd.DataFrame:
         id_col="Entry",
         model_size=opts.get("squidly_model_size", "3B"),
         as_threshold=opts.get("squidly_as_threshold", None),
+        # Ensemble-mode residue-selection thresholds (squidly `run` CLI:
+        # mean_prob default 0.6, mean_var default 0.225). Lower mean_prob /
+        # higher mean_var => predicts lower-confidence residues, needed for
+        # enzymes without a canonical catalytic triad. None => squidly default.
+        mean_prob=opts.get("squidly_mean_prob", None),
+        mean_var=opts.get("squidly_mean_var", None),
         num_threads=opts.get("squidly_num_threads") or ctx.config.runtime.num_threads,
     )
     df_squidly = squidly_step.execute(df)
