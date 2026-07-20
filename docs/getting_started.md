@@ -1,7 +1,47 @@
 # Getting Started
 
 StructureZyme is a modular pipeline for enzyme structure/function prediction.
-This is a stub guide covering one-time model-weight setup; Phase E will expand it.
+This guide covers installing the environment, the one-time model-weight setup,
+and the command-line workflow.
+
+## Environment
+
+StructureZyme runs in the `structurezyme` conda environment defined by
+`environment.yml`. Create it and install the package itself:
+
+```bash
+conda env create -f environment.yml
+conda activate structurezyme
+pip install -e .
+```
+
+The environment pins Python 3.11 and the pipeline's scientific dependencies
+(e.g. `foldseek`, `mmseqs2`, `openmm`, `fpocket`, `plip`) plus the pip packages
+`squidly`, `chai_lab`, `docko`, `pydantic`, `pyyaml`, and `filelock`.
+
+## CLI workflow
+
+The `structurezyme` CLI drives runs. A typical session:
+
+```bash
+# 1. Write a template config, then edit its paths/steps
+structurezyme init --output run.yml
+
+# 2. Run the full pipeline (host defaults fill in site-specific paths)
+structurezyme run --config run.yml --host default
+
+# 3. Check progress (per-step status + wall time)
+structurezyme status --run-dir <output_root>/<user>/<run_id>
+
+# 4. Resume after a crash or a config change
+structurezyme resume --run-dir <output_root>/<user>/<run_id>
+```
+
+Runs are resumable: completed steps with matching config/input hashes are
+skipped on re-run. To re-run a single module use
+`structurezyme step <name> --run-dir <dir>` (add `--continue` to also recompute
+downstream steps). See [`api_reference.md`](api_reference.md) for the full
+subcommand and module reference.
 
 ## Catalytic-residue model weights (Squidly)
 
