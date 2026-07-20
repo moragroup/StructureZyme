@@ -48,6 +48,34 @@ def _superimp_dir(ctx) -> Path:
     return d
 
 
+def _publish_relaxed_to_prepared(fastrelax_dir: Path, prepared_dir: Path) -> int:
+    """Copy fastrelax's ``*_relaxed.pdb`` outputs into the prepared-files dir.
+
+    When fastrelax is enabled it rewrites ``docked_structure`` to the relaxed
+    pose names (``<stem>_relaxed``) but writes the relaxed pdbs only under
+    ``fastrelax_dir``. The downstream analysis steps (geometric_filter, fpocket,
+    ligand_sasa, plip, placer) resolve poses as
+    ``prepared_dir / f"{docked_structure}.pdb"``. Copying the relaxed pdbs into
+    ``prepared_dir`` under their ``_relaxed`` names makes those lookups resolve
+    to the refined structures without touching the individual step classes.
+
+    Returns the number of files copied. Missing dirs / no relaxed files are a
+    no-op (returns 0), so the fastrelax-disabled path is unaffected.
+    """
+    import shutil
+
+    fastrelax_dir = Path(fastrelax_dir)
+    prepared_dir = Path(prepared_dir)
+    if not fastrelax_dir.is_dir():
+        return 0
+    prepared_dir.mkdir(parents=True, exist_ok=True)
+    copied = 0
+    for src in fastrelax_dir.glob("*_relaxed.pdb"):
+        shutil.copy2(src, prepared_dir / src.name)
+        copied += 1
+    return copied
+
+
 def _geo_dir(ctx) -> Path:
     d = ctx.layout.root / "geometricfiltering"
     d.mkdir(parents=True, exist_ok=True)
@@ -343,7 +371,14 @@ def run_fastrelax(ctx, spec) -> pd.DataFrame:
         ligand_resname=opts.get("ligand_resname", "LIG"),
         num_threads=num_threads,
     )
-    return step.execute(df_prep)
+    df_relaxed = step.execute(df_prep)
+    # Make the relaxed poses resolvable by the downstream analysis steps, which
+    # look up preparedfiles_for_superimposition/<docked_structure>.pdb using the
+    # now-relaxed pose names. See _publish_relaxed_to_prepared.
+    _publish_relaxed_to_prepared(
+        fastrelax_dir, superimp_dir / "preparedfiles_for_superimposition"
+    )
+    return df_relaxed
 
 
 def _superimpose_input(ctx, spec) -> pd.DataFrame:

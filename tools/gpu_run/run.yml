@@ -23,11 +23,15 @@ runtime:
   # "Length of values (N) does not match length of index (1)". One thread is also
   # fine perf-wise for a single enzyme. Increase only for many-row inputs.
   num_threads: 1
-  # protein_rmsd's earlier checkpoint was produced before the _relaxed
-  # tool-name fix, so its `tool` column is corrupt ('relaxed' for every pose).
-  # Force it to re-run; downstream steps re-run automatically via input-hash
-  # invalidation once protein_rmsd's output changes. Remove once re-run.
-  force: [protein_rmsd]
+  # Re-run the affected tail explicitly. fastrelax now also publishes its
+  # *_relaxed.pdb into preparedfiles_for_superimposition/ (so the 5 analysis
+  # steps find the relaxed poses instead of silently skipping); protein_rmsd's
+  # earlier checkpoint has a corrupt `tool` column (pre _relaxed tool-name fix).
+  # The analysis steps are listed explicitly because fastrelax re-pickling may
+  # produce byte-identical output (unchanged input hash), which would otherwise
+  # let them skip and miss the newly-copied relaxed files. Remove after a clean
+  # full run.
+  force: [fastrelax, protein_rmsd, ligand_rmsd, geometric_filter, fpocket, ligand_sasa, plip, placer]
 steps:
   squidly:
     enabled: true
