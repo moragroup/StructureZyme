@@ -47,6 +47,10 @@ def _make_logger(layout: RunLayout) -> logging.Logger:
 
 class Runner:
     def __init__(self, config: RunConfig):
+        # Enforce required paths at the real run boundary. Host defaults (if any)
+        # must already have been applied by the caller (e.g. the CLI) before
+        # constructing the Runner.
+        config.validate_paths()
         self.config = config
         self.layout = RunLayout(run_dir(config.paths.output_root,
                                         config.runtime.user,

@@ -3,7 +3,7 @@ import getpass
 from datetime import datetime
 from pathlib import Path
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 class StepConfig(BaseModel):
     model_config = ConfigDict(extra="allow")
@@ -43,8 +43,15 @@ class RunConfig(BaseModel):
     runtime: RuntimeConfig = RuntimeConfig()
     steps: StepsConfig = StepsConfig()
 
-    @model_validator(mode="after")
-    def _require_core_paths(self):
+    def validate_paths(self) -> "RunConfig":
+        """Assert required paths are set. Call AFTER host defaults are applied.
+
+        ``output_root`` and ``boltz_cache_dir`` may be left empty at
+        construction so that a host profile (see
+        ``structurezyme.hosts.apply_host_defaults``) can fill them. This gate
+        must be invoked at the real run boundary (CLI / Runner start) once
+        those defaults have been merged.
+        """
         missing = [n for n in ("output_root", "boltz_cache_dir")
                    if not getattr(self.paths, n)]
         if missing:
