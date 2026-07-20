@@ -29,6 +29,7 @@ class StepsConfig(BaseModel):
 class PathsConfig(BaseModel):
     output_root: str = ""
     boltz_cache_dir: str = ""
+    input_csv: str = ""
     squidly_weights_dir: str | None = None
     placer_env_path: str = "/mnt/labs/data/mora/software/PLACER/env"
 
@@ -52,7 +53,7 @@ class RunConfig(BaseModel):
         must be invoked at the real run boundary (CLI / Runner start) once
         those defaults have been merged.
         """
-        missing = [n for n in ("output_root", "boltz_cache_dir")
+        missing = [n for n in ("output_root", "boltz_cache_dir", "input_csv")
                    if not getattr(self.paths, n)]
         if missing:
             raise ValueError(
