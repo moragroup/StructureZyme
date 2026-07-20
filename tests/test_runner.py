@@ -7,8 +7,12 @@ from structurezyme import registry
 from structurezyme.registry import ordered_steps
 
 def _cfg(tmp_path):
+    csv = tmp_path / "input.csv"
+    pd.DataFrame({"Sequence": ["M"], "substrate_smiles": ["C"], "Entry": ["P1"],
+                  "vina_residues": ["1|2"], "substrate_moiety": ["[C]"]}).to_csv(csv, index=False)
     return RunConfig(
-        paths={"output_root": str(tmp_path), "boltz_cache_dir": str(tmp_path / "cache")},
+        paths={"output_root": str(tmp_path), "boltz_cache_dir": str(tmp_path / "cache"),
+               "input_csv": str(csv)},
         runtime={"user": "tester", "run_id": "r1"},
     )
 

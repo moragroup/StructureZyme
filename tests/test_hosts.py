@@ -23,6 +23,7 @@ def test_empty_construct_then_host_apply_fills_paths():
     assert out.paths.output_root == prof["output_root"]
     assert out.paths.boltz_cache_dir == prof["boltz_cache_dir"]
     # validate_paths passes once defaults are applied
+    out.paths.input_csv = "/some/in.csv"
     out.validate_paths()
 
 def test_validate_paths_raises_when_core_paths_missing():
@@ -31,5 +32,5 @@ def test_validate_paths_raises_when_core_paths_missing():
         cfg.validate_paths()
 
 def test_validate_paths_returns_self_when_ok():
-    cfg = RunConfig(paths={"output_root": "/o", "boltz_cache_dir": "/c"})
+    cfg = RunConfig(paths={"output_root": "/o", "boltz_cache_dir": "/c", "input_csv": "/in.csv"})
     assert cfg.validate_paths() is cfg
