@@ -104,3 +104,12 @@ def test_seed_raises_on_missing_enabled_column(tmp_path):
     with pytest.raises(ValueError) as e:
         r._seed_and_validate()
     assert "vina" in str(e.value) and "vina_residues" in str(e.value)
+
+
+import yaml
+from structurezyme.cli import _template
+
+
+def test_init_template_has_input_csv():
+    d = _template().model_dump()
+    assert "input_csv" in d["paths"]
