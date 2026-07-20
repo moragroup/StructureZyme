@@ -242,12 +242,11 @@ class PLACER(Step):
             empty["placer_dir"] = None
 
             if not pdb_path.exists():
-                logger.warning(
-                    "PLACER: PDB not found for entry %s: %s. Skipping.", entry, pdb_path
+                # Missing prepared PDB = upstream pipeline failure. Fail loudly
+                # rather than emit an empty (None) score row that looks OK.
+                raise FileNotFoundError(
+                    f"PLACER: prepared PDB not found for entry {entry}: {pdb_path}"
                 )
-                for k, v in empty.items():
-                    new_cols[k].append(v)
-                continue
 
             n_ligands = _count_ligands(pdb_path, self.predict_ligand)
             cmd = self._build_cmd(pdb_path, n_ligands)

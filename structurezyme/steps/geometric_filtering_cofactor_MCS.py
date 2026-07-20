@@ -455,6 +455,14 @@ class GeneralGeometricFiltering(Step):
             tool = row['tool']
             row_result = {}
 
+            # Missing prepared PDB = upstream pipeline failure. Check BEFORE the
+            # try block so the raise is not swallowed into an empty result row.
+            pdb_file = Path(self.preparedfiles_dir / f"{docked_structure_name}.pdb")
+            if not pdb_file.exists():
+                raise FileNotFoundError(
+                    f"Prepared PDB not found for {docked_structure_name}: {pdb_file}"
+                )
+
             default_result = {
                 'distance_ligand_to_cofactor': None, 
                 'distance_ligand_to_closest_nuc': None,
@@ -463,8 +471,6 @@ class GeneralGeometricFiltering(Step):
             }
             try: 
                 # Load full PDB structure
-                pdb_file = self.preparedfiles_dir / f"{docked_structure_name}.pdb"
-                pdb_file = Path(pdb_file)
                 logger.info(f"Processing PDB file: {pdb_file.name}")
 
                 # Extract chain IDs of ligands

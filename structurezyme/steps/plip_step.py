@@ -100,7 +100,14 @@ class PLIP(Step):
             row_result = {}
 
             logger.info(f"Processing PDB file: {pdb_file_as_path.name}")
-            
+
+            if not pdb_file_as_path.exists():
+                # Missing prepared PDB = upstream pipeline failure. Fail loudly
+                # rather than swallow it into an empty (None) result row.
+                raise FileNotFoundError(
+                    f"Prepared PDB not found for {best_structure_name}: {pdb_file_as_path}"
+                )
+
             try:
 
                 # Default result structure

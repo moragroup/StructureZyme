@@ -244,8 +244,13 @@ class Fpocket(Step):
         row_results = {"ASvolume_dir": None}
 
         if not pdb_file_path.exists():
-            logger.error(f"PDB file not found for processing: {pdb_file_path}. Skipping.")
-            return pd.Series(row_results, index=row_results.keys())
+            # A missing prepared PDB means an upstream step (docking /
+            # prepare_files / fastrelax) failed to produce this structure.
+            # Fail loudly instead of returning an empty row that would make
+            # the step look successful.
+            raise FileNotFoundError(
+                f"Prepared PDB not found for {best_structure_name}: {pdb_file_path}"
+            )
 
         with TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)

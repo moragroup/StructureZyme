@@ -105,7 +105,14 @@ class LigandSASA(Step):
                 'percentage_buried_sasa': None}
 
             logger.info(f"Processing PDB file: {pdb_file.name}")
-            
+
+            if not pdb_file.exists():
+                # Missing prepared PDB = upstream pipeline failure. Fail loudly
+                # rather than swallow it into an empty (None) result row.
+                raise FileNotFoundError(
+                    f"Prepared PDB not found for {best_structure_name}: {pdb_file}"
+                )
+
             try:
                 ligand = select_ligand_from_smiles_via_composition(pdb_file, substrate_smiles)
                 if not ligand:

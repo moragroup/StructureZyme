@@ -436,6 +436,14 @@ class EsteraseGeometricFiltering(Step):
             substrate_moiety = row['substrate_moiety']
             row_result = {}
 
+            # Missing prepared PDB = upstream pipeline failure. Check BEFORE the
+            # try block so the raise is not swallowed into an empty result row.
+            pdb_file = Path(self.preparedfiles_dir / f"{docked_structure_name}.pdb")
+            if not pdb_file.exists():
+                raise FileNotFoundError(
+                    f"Prepared PDB not found for {docked_structure_name}: {pdb_file}"
+                )
+
             default_result = {
                 'distance_ligand_to_closest_nuc': None,
                 'Bürgi–Dunitz_angle_to_closest_nucleophile': None
@@ -443,7 +451,6 @@ class EsteraseGeometricFiltering(Step):
 
             try:
                 # Load full PDB structure
-                pdb_file = self.preparedfiles_dir / f"{docked_structure_name}.pdb"
                 logger.info(f"Processing PDB file: {pdb_file.name}")
                 protein_structure = load_pdb_structure(pdb_file)
 
