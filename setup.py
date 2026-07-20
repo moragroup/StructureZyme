@@ -41,7 +41,7 @@ setup(name='structurezyme',
       keywords='util',
       packages=find_packages(exclude=["outdated", "outdated.*"]),
       include_package_data=True,
-      package_data={"structurezyme": ["*.yml"]},
+      package_data={"structurezyme": ["*.yml", "templates/*.j2"]},
       entry_points={
           'console_scripts': [
               'structurezyme = structurezyme.cli:main'

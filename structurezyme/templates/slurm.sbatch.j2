@@ -1,0 +1,9 @@
+#!/bin/bash
+#SBATCH --job-name={job_name}
+#SBATCH --partition={partition}
+#SBATCH --gres=gpu:{gpus}
+#SBATCH --time={time_limit}
+#SBATCH --output=%x-%j.out
+
+set -euo pipefail
+structurezyme run --config {config_path} --host {host}

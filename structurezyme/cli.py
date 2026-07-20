@@ -1,6 +1,7 @@
 # structurezyme/cli.py
 import argparse
 import sys
+from importlib import resources
 from pathlib import Path
 
 from .config import RunConfig, PathsConfig, load_config
@@ -61,6 +62,33 @@ def cmd_status(args) -> int:
     return 0
 
 
+def render_sbatch(config_path, host, job_name, partition, gpus, time_limit) -> str:
+    """Render the Slurm submission script for a run."""
+    tmpl = resources.files("structurezyme.templates").joinpath(
+        "slurm.sbatch.j2").read_text()
+    return tmpl.format(job_name=job_name, partition=partition, gpus=gpus,
+                       time_limit=time_limit, config_path=config_path, host=host)
+
+
+def cmd_submit(args) -> int:
+    script = render_sbatch(args.config, args.host or "default", args.job_name,
+                           args.partition, args.gpus, args.time)
+    if args.dry_run:
+        print(script)
+        return 0
+    import os
+    import subprocess
+    import tempfile
+    with tempfile.NamedTemporaryFile("w", suffix=".sbatch", delete=False) as fh:
+        fh.write(script)
+        path = fh.name
+    try:
+        subprocess.run(["sbatch", path], check=True)
+    finally:
+        os.unlink(path)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="structurezyme")
     sub = p.add_subparsers(dest="command", required=True)
@@ -90,6 +118,16 @@ def build_parser() -> argparse.ArgumentParser:
     pstat = sub.add_parser("status")
     pstat.add_argument("--run-dir", required=True)
     pstat.set_defaults(func=cmd_status)
+
+    psub = sub.add_parser("submit")
+    psub.add_argument("--config", required=True)
+    psub.add_argument("--host", default=None)
+    psub.add_argument("--job-name", default="structurezyme")
+    psub.add_argument("--partition", default="gpu")
+    psub.add_argument("--gpus", type=int, default=1)
+    psub.add_argument("--time", default="24:00:00")
+    psub.add_argument("--dry-run", action="store_true")
+    psub.set_defaults(func=cmd_submit)
 
     return p
 
