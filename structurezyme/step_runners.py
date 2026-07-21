@@ -101,6 +101,68 @@ def _opts(ctx, name) -> dict:
     return ctx.config.step_options(name)
 
 
+def _reconcile_with_input_entries(
+    returned: pd.DataFrame,
+    source: pd.DataFrame,
+    entry_col: str = "Entry",
+) -> pd.DataFrame:
+    """Ensure every ``entry_col`` value in ``source`` survives in ``returned``.
+
+    Several step implementations (``LigandRMSD``, ``SuperimposeStructures``,
+    ``Vina``, ...) walk on-disk artifacts and quietly drop rows whose
+    per-artifact processing raised. When a step's returned frame is missing
+    entries that were in the input frame, downstream analysis loses those
+    enzymes entirely.
+
+    This helper re-introduces every missing ``entry_col`` value from
+    ``source`` as a single row whose metric-side columns (those unique to
+    ``returned``) are ``NaN``, while identifier/path columns coming from
+    ``source`` are carried over unchanged. Column order matches
+    ``returned``; extra source columns are appended.
+
+    ``returned`` is returned unchanged when every ``source`` entry is
+    already present.
+    """
+    import numpy as np
+
+    if entry_col not in source.columns:
+        return returned
+    src_entries = source[entry_col].dropna().astype(str).unique()
+    if len(src_entries) == 0:
+        return returned
+    if entry_col in returned.columns:
+        got_entries = set(returned[entry_col].dropna().astype(str).unique())
+    else:
+        got_entries = set()
+    missing = [e for e in src_entries if e not in got_entries]
+    if not missing:
+        return returned
+
+    src_by_entry = source.drop_duplicates(subset=[entry_col]).set_index(
+        source.drop_duplicates(subset=[entry_col])[entry_col].astype(str)
+    )
+
+    filler_rows = []
+    for entry in missing:
+        row = {c: np.nan for c in returned.columns}
+        row[entry_col] = entry
+        # Copy over identifier / path columns from source when available.
+        if entry in src_by_entry.index:
+            src_row = src_by_entry.loc[entry]
+            for c in source.columns:
+                if c in returned.columns and pd.isna(row[c]):
+                    row[c] = src_row[c]
+                elif c not in returned.columns:
+                    row[c] = src_row[c]
+        filler_rows.append(row)
+
+    filler = pd.DataFrame(filler_rows)
+    # Preserve returned's dtypes where possible by concatenating; new columns
+    # from source (if any) are appended at the end.
+    out = pd.concat([returned, filler], ignore_index=True, sort=False)
+    return out
+
+
 # --------------------------------------------------------------------------
 # Docking phase
 # --------------------------------------------------------------------------
@@ -560,8 +622,15 @@ def run_ligand_rmsd(ctx, spec) -> pd.DataFrame:
         LigandRMSD("Entry", input_dir=input_dir, output_dir=ligandRMSD_dir,
                    visualize_heatmaps=True, maxMatches=max_matches)
     )
+    # LigandRMSD silently drops entries whose pose comparisons all failed
+    # (rdkit valence / substructure errors). Reintroduce those entries with
+    # NaN metric columns so downstream analysis still sees the enzyme.
+    df_ligandRMSD = _reconcile_with_input_entries(df_ligandRMSD, df)
     df_ligandRMSD.to_pickle(superimp_dir / "ligandRMSD_prior.pkl")
     df_ligandRMSD_w_metrics = extract_docking_metrics(df_ligandRMSD)
+    df_ligandRMSD_w_metrics = _reconcile_with_input_entries(
+        df_ligandRMSD_w_metrics, df
+    )
     df_ligandRMSD_w_metrics.to_pickle(superimp_dir / "ligandRMSD.pkl")
     df_ligandRMSD_pairwise.to_pickle(superimp_dir / "ligandRMSD_pairwise.pkl")
     return df_ligandRMSD_w_metrics
@@ -593,7 +662,9 @@ def run_geometric_filter(ctx, spec) -> pd.DataFrame:
             GeneralGeometricFiltering(preparedfiles_dir=prepared, output_dir=geo_dir)
             >> Save(geo_dir / "geometricfiltering.pkl")
         )
-    return df_geo_filter
+    # Reconcile: preserve every input Entry so downstream analysis still sees
+    # enzymes whose geometric filter dropped all poses.
+    return _reconcile_with_input_entries(df_geo_filter, df)
 
 
 def run_fpocket(ctx, spec) -> pd.DataFrame:
@@ -612,7 +683,7 @@ def run_fpocket(ctx, spec) -> pd.DataFrame:
         Fpocket(preparedfiles_dir=prepared, output_dir=fpocket_dir)
         >> Save(geo_dir / "ASvolume.pkl")
     )
-    return df_ASVolume
+    return _reconcile_with_input_entries(df_ASVolume, df)
 
 
 def run_ligand_sasa(ctx, spec) -> pd.DataFrame:
@@ -630,7 +701,7 @@ def run_ligand_sasa(ctx, spec) -> pd.DataFrame:
         LigandSASA(input_dir=prepared, output_dir=ligandSASA_dir)
         >> Save(geo_dir / "ligandSASA.pkl")
     )
-    return df_ligandSASA
+    return _reconcile_with_input_entries(df_ligandSASA, df)
 
 
 def run_plip(ctx, spec) -> pd.DataFrame:
@@ -651,6 +722,7 @@ def run_plip(ctx, spec) -> pd.DataFrame:
         PLIP(input_dir=prepared, output_dir=geo_dir)
         >> Save(geo_dir / "plip_interactions.pkl")
     )
+    df_plip = _reconcile_with_input_entries(df_plip, df)
     df_plip.to_pickle(geo_dir / "structural_features_final.pkl")
     return df_plip
 
@@ -685,5 +757,6 @@ def run_placer(ctx, spec) -> pd.DataFrame:
         num_threads=num_threads,
     )
     df_placer = placer.execute(df_geo)
+    df_placer = _reconcile_with_input_entries(df_placer, df_geo)
     df_placer.to_pickle(geo_pkl)
     return df_placer
