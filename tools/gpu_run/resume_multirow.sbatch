@@ -7,12 +7,13 @@
 #SBATCH --output=sz_resume_%j.out
 #SBATCH --error=sz_resume_%j.err
 
-# Resume the multi-row run from the `superimpose` step onward, exercising the
-# per-row-vina-skip fix in run_superimpose (commit 4a2bac5). Reuses the
-# already-completed squidly/chai/boltz/vina/docking_metrics/prepare_files/
-# fastrelax checkpoints from gpu-multirow-02, so this run only touches the
-# CPU-only tail (superimpose -> protein_rmsd -> ligand_rmsd -> geometric_filter
-# -> fpocket -> ligand_sasa -> plip -> placer).
+# Resume the multi-row run from the `ligand_rmsd` step onward, exercising the
+# entry-reconciliation fix (commit 5aad838). superimpose + protein_rmsd already
+# preserved all 3 entries after the per-row-vina superimpose fix (4a2bac5);
+# ligand_rmsd dropped the FMOs because all pose comparisons raised in rdkit.
+# This resume forces ligand_rmsd (and everything downstream) to recompute
+# against the reconciled frame so geometric_filter/fpocket/ligand_sasa/plip/
+# placer all see 3 entries.
 #
 # Submit from the repo root:
 #   sbatch tools/gpu_run/resume_multirow.sbatch
@@ -37,10 +38,11 @@ RUN_DIR="/mnt/labs/data/mora/structurezyme_runs/lherrmann/gpu-multirow-02"
 echo "host=$(hostname)  python=$(which python)"
 echo "run_dir=$RUN_DIR"
 
-# Force superimpose to re-run (its old checkpoint has only 1 entry from the
-# pre-fix run) and let every downstream step follow, recomputing any whose
-# inputs change.
-structurezyme step superimpose --run-dir "$RUN_DIR" --continue
+# Force ligand_rmsd to re-run against the reconciled superimpose/protein_rmsd
+# frames, and let every downstream step follow -- the reconciled ligand_rmsd
+# pickle will change bytes, invalidating the geometric_filter/fpocket/
+# ligand_sasa/plip/placer checkpoint hashes so they recompute automatically.
+structurezyme step ligand_rmsd --run-dir "$RUN_DIR" --continue
 
 echo "---- MANIFEST ----"
 structurezyme status --run-dir "$RUN_DIR" || true
