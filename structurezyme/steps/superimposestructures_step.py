@@ -255,6 +255,22 @@ class SuperimposeStructures(Step):
             structure_2_ligands = {}
             row_output_paths = []
 
+            # Per-row defensive guard: skip rows whose structure column is
+            # missing/empty (e.g. residue-less enzymes for which run_vina left
+            # ``vina_files_for_superimposition = None``). Callers should already
+            # split those rows out (see run_superimpose), but iterating a None
+            # column here would raise TypeError, so we fail soft instead.
+            s1_files = row[self.structure_1]
+            s2_files = row[self.structure_2]
+            if (not isinstance(s1_files, (list, tuple)) or len(s1_files) == 0
+                    or not isinstance(s2_files, (list, tuple)) or len(s2_files) == 0):
+                logger.warning(
+                    f"Skipping superimposition for {entry_name}: missing "
+                    f"{self.structure_1} or {self.structure_2} file list."
+                )
+                all_output_paths.append([])
+                continue
+
             for structure_1_path in row[self.structure_1]:
                 structure_1_path = Path(structure_1_path)
                 if not structure_1_path.exists():

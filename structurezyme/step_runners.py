@@ -468,25 +468,44 @@ def run_superimpose(ctx, spec) -> pd.DataFrame:
 
     output_sup_dir = superimp_dir / "superimposed_structures"
 
+    # Chai files are always required (chai is a mandatory step). Filter here
+    # once so both the with-vina and without-vina branches share the guarantee.
+    df = df[df["chai_files_for_superimposition"].apply(valid_file_list)]
+
     if include_vina:
-        df = df[df["vina_files_for_superimposition"].apply(valid_file_list)]
-        df = df[df["chai_files_for_superimposition"].apply(valid_file_list)]
+        # Per-row vina skip: split rows into those that actually have valid
+        # vina files vs. those that don't (e.g. residue-less enzymes for which
+        # run_vina left vina_files_for_superimposition = None). The former get
+        # the full 3-way superimpose (vina<->chai, vina<->boltz, chai<->boltz);
+        # the latter get chai<->boltz only. Both subsets are concatenated so
+        # every row survives into the downstream frame.
+        has_vina = df["vina_files_for_superimposition"].apply(valid_file_list)
+        df_with_vina = df[has_vina]
+        df_without_vina = df[~has_vina]
 
-        df_sup = df << (
-            SuperimposeStructures("vina_files_for_superimposition", "chai_files_for_superimposition",
-                                  output_dir=output_sup_dir, name1="vina", name2="chai",
-                                  num_threads=num_threads)
-            >> SuperimposeStructures("vina_files_for_superimposition", "boltz_files_for_superimposition",
-                                     output_dir=output_sup_dir, name1="vina", name2="boltz",
-                                     num_threads=num_threads)
-            >> SuperimposeStructures("chai_files_for_superimposition", "boltz_files_for_superimposition",
-                                     output_dir=output_sup_dir, name1="chai", name2="boltz",
-                                     num_threads=num_threads)
-            >> Save(superimp_dir / "superimposedstructures.pkl")
-        )
+        if len(df_with_vina):
+            df_with_vina = df_with_vina << (
+                SuperimposeStructures("vina_files_for_superimposition", "chai_files_for_superimposition",
+                                      output_dir=output_sup_dir, name1="vina", name2="chai",
+                                      num_threads=num_threads)
+                >> SuperimposeStructures("vina_files_for_superimposition", "boltz_files_for_superimposition",
+                                         output_dir=output_sup_dir, name1="vina", name2="boltz",
+                                         num_threads=num_threads)
+                >> SuperimposeStructures("chai_files_for_superimposition", "boltz_files_for_superimposition",
+                                         output_dir=output_sup_dir, name1="chai", name2="boltz",
+                                         num_threads=num_threads)
+            )
+
+        if len(df_without_vina):
+            df_without_vina = df_without_vina << (
+                SuperimposeStructures("chai_files_for_superimposition", "boltz_files_for_superimposition",
+                                      output_dir=output_sup_dir, name1="chai", name2="boltz",
+                                      num_threads=num_threads)
+            )
+
+        df_sup = pd.concat([df_with_vina, df_without_vina], ignore_index=True)
+        df_sup.to_pickle(superimp_dir / "superimposedstructures.pkl")
     else:
-        df = df[df["chai_files_for_superimposition"].apply(valid_file_list)]
-
         df_sup = df << (
             SuperimposeStructures("chai_files_for_superimposition", "boltz_files_for_superimposition",
                                   output_dir=output_sup_dir, name1="chai", name2="boltz",
