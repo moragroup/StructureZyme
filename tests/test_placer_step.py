@@ -1,4 +1,4 @@
-"""Tests for filterzyme.steps.PLACER_step.
+"""Tests for structurezyme.steps.PLACER_step.
 
 Covers the module-level `_count_ligands` helper (ported from the deleted
 `PLACER_forChai_step._count_ligands` method) and the `PLACER` step
@@ -13,7 +13,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from filterzyme.steps.PLACER_step import (
+from structurezyme.steps.PLACER_step import (
     PLACER,
     _count_ligands,
     _parse_placer_csv,
@@ -471,8 +471,12 @@ def test_execute_subprocess_failure_sets_none(tmp_path, monkeypatch):
     assert row["placer_dir"] is None
 
 
-def test_execute_missing_pdb_skips_entry(tmp_path, monkeypatch):
-    """If the docked PDB doesn't exist in preparedfiles_dir, log+skip that entry."""
+def test_execute_missing_pdb_raises(tmp_path, monkeypatch):
+    """A missing docked PDB is an upstream pipeline failure: fail loudly.
+
+    Previously this was silently skipped (empty result row), which masked real
+    breakage. Now it must raise FileNotFoundError before subprocess is invoked.
+    """
     import subprocess
 
     fake_script = tmp_path / "fake_run_PLACER.py"
@@ -504,8 +508,6 @@ def test_execute_missing_pdb_skips_entry(tmp_path, monkeypatch):
         "is_best": [True],
         "best_method": ["inter_tool_min_per_tool"],
     })
-    result = step.execute(df)
-    assert len(called) == 0  # subprocess not called
-    row = result.iloc[0]
-    assert row["placer_prmsd"] is None
-    assert row["placer_dir"] is None
+    with pytest.raises(FileNotFoundError):
+        step.execute(df)
+    assert len(called) == 0  # failed before invoking subprocess

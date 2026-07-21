@@ -252,5 +252,13 @@ models/
 .kilo/
 .kilo-tmp/
 
+# Slurm job stdout/stderr artifacts from GPU runs
+sz_*.out
+sz_*.err
+slurm-*.out
+
 # Git worktrees (isolated workspaces for feature branches)
 .worktrees/
+
+# Retired code and stale bundled weights (superseded; kept on disk for reference)
+outdated/

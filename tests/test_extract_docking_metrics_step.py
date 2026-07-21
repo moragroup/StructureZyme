@@ -1,4 +1,4 @@
-"""Tests for `filterzyme.steps.extract_docking_metrics_step`.
+"""Tests for `structurezyme.steps.extract_docking_metrics_step`.
 
 Covers the pure-logic Vina log path helper (`_vina_log_path`), the
 pre-existing but previously untested `parse_vina_output`, and the
@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from filterzyme.steps.extract_docking_metrics_step import (
+from structurezyme.steps.extract_docking_metrics_step import (
     DockingMetrics,
     _vina_log_path,
     parse_vina_output,

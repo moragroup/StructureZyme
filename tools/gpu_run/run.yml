@@ -1,0 +1,65 @@
+# All-modules StructureZyme run config for the Phase F GPU verification run.
+#
+# output_root / boltz_cache_dir / squidly_weights_dir / placer_env_path are left
+# empty here and filled from the `default` host profile (structurezyme/hosts.yml)
+# at run time via `run --host default`. input_csv points at the CalB input
+# pickle produced by tools/gpu_run/make_input.py.
+#
+# Every module is ENABLED, including the three that default to disabled
+# (vina, fastrelax, placer), so this run exercises the full pipeline.
+paths:
+  output_root: ''
+  boltz_cache_dir: ''
+  squidly_weights_dir: null
+  # placer_env_path omitted -> defaults to the sentinel, which the `default`
+  # host profile fills. Set it explicitly only to override the host value.
+  input_csv: tools/gpu_run/input.pkl
+runtime:
+  user: lherrmann
+  run_id: gpu-allmodules-01
+  # NOTE: keep at 1. The external enzymetk Boltz/docking steps np.array_split the
+  # input frame across threads and then assign per-pose outputs back column-wise;
+  # with a single input row and num_threads > 1 this raises
+  # "Length of values (N) does not match length of index (1)". One thread is also
+  # fine perf-wise for a single enzyme. Increase only for many-row inputs.
+  num_threads: 1
+  # `force` lists steps to re-run even if a valid checkpoint exists. Empty for a
+  # fresh run. (During bring-up this was used to re-run the tail after fixes; a
+  # clean full run has since been verified with all 15 steps OK.)
+  force: []
+steps:
+  squidly:
+    enabled: true
+  chai:
+    enabled: true
+  boltz:
+    enabled: true
+  vina:
+    enabled: true
+  docking_metrics:
+    enabled: true
+  prepare_files:
+    enabled: true
+  fastrelax:
+    enabled: true
+    fastrelax_top_k: 2
+    fastrelax_mode: ligand_focused
+  superimpose:
+    enabled: true
+  protein_rmsd:
+    enabled: true
+  ligand_rmsd:
+    enabled: true
+  geometric_filter:
+    enabled: true
+  fpocket:
+    enabled: true
+  ligand_sasa:
+    enabled: true
+  plip:
+    enabled: true
+  placer:
+    enabled: true
+    placer_predict_ligand: LIG
+    placer_nsamples: 50
+    placer_rerank: prmsd

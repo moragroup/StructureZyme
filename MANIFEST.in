@@ -1,0 +1,5 @@
+include LICENSE
+include README.md
+include environment.yml
+recursive-include structurezyme *.yml
+recursive-include structurezyme/templates *.j2

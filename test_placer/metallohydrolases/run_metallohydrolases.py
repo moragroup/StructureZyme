@@ -7,13 +7,13 @@ import argparse
 from pathlib import Path 
 
 sys.path.insert(0, '/nvme2/helen/EnzymeStructuralFiltering/')
-import filterzyme
-print(filterzyme.__file__)  
+import structurezyme
+print(structurezyme.__file__)  
 
-from filterzyme.pipeline_v2 import Pipeline
-from filterzyme.pipeline_v2 import Docking
-from filterzyme.pipeline_v2 import Superimposition
-from filterzyme.pipeline_v2 import GeometricFilters
+from structurezyme.pipeline import Pipeline
+from structurezyme.pipeline import Docking
+from structurezyme.pipeline import Superimposition
+from structurezyme.pipeline import GeometricFilters
 
 
 df = pd.read_pickle('metallohydrolases_input_data.pkl')
