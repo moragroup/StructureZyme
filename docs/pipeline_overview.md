@@ -101,6 +101,51 @@ into relaxation.
 `superimpose` consumes its relaxed frame; when `fastrelax` is disabled it is
 skipped, and `superimpose` consumes the `prepare_files` frame instead.
 
+## Ligand RMSD & best-pose selection
+
+`ligand_rmsd` (`structurezyme/steps/computeligandRMSD_step.py`) computes
+pairwise ligand RMSDs between all docked poses per entry and then calls
+`select_best_docked_structures` to flag one or more "best" poses per entry.
+Downstream steps that consume a single pose per entry (PLIP, ligand SASA,
+fpocket, PLACER) read the `is_best` / `best_method` columns produced here;
+`PLACER_step._select_one_per_entry` further reduces to exactly one row.
+
+Three selection methods vote independently, each recorded in `best_method`:
+
+1. **`inter_tool_weighted_avg`** — for each pose, average RMSD to every pose
+   of every *other* tool, weighted by that tool's pose count. Pick the min.
+2. **`inter_tool_min_per_tool`** — for each pose, take the *closest* pose per
+   other tool and average those minima. Pick the min.
+3. **`vina_avg_intra_tool`** — among vina poses only, pick the one with the
+   lowest mean RMSD to the other vina poses. Requires ≥2 vina poses.
+
+### Known design gap: selector ignores `fastrelax_score`
+
+The current selector uses **only inter-tool geometric consensus**. It does
+not consult `fastrelax_score` (the Rosetta interaction energy computed by
+the `fastrelax` step) or docking-engine confidence metrics. Two consequences
+observed on real runs:
+
+- When a run enables `chai` + `boltz` but not `vina`, both consensus methods
+  reduce to "closest to the poses of the other tool." If one tool contributes
+  many more poses than the other (e.g. 4 chai poses vs 1 boltz pose), the
+  majority tool's poses cluster near their own mean and the pose closest to
+  the minority tool's single point wins both methods — deterministically.
+- A pose with a much better `fastrelax_score` can lose to a
+  geometrically-central pose with a worse energy. On `fmo-fad-01` this
+  produced `tool="chai"` on all 18 entries in `placer.pkl`, even for entries
+  where the single boltz pose had a substantially lower (better)
+  `fastrelax_score` than any chai pose.
+
+**Status**: not a bug — the behavior is deterministic and matches the
+docstring. But the selector should be redesigned to combine geometric
+consensus with `fastrelax_score` (and possibly engine confidence) rather
+than relying on consensus alone. Options range from adding a fourth
+`fastrelax_min` method (small change; gives energy a vote via
+`_method_count`) to a rank-fusion / weighted-score hybrid (larger change;
+requires design discussion). Any redesign must handle the single-pose-per-
+tool case explicitly, since intra-tool consensus is undefined there.
+
 ## PLACER step
 
 `placer` is the final step in the graph, depending on `plip`. It is
