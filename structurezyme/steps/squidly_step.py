@@ -28,6 +28,30 @@ _ESM2_MODELS = {
 _AA_PATTERN = re.compile(r"^[A-Z*\-]+$")
 
 
+def _select_residues_from_ensemble(mean, variance, mean_prob: float, mean_var: float) -> str:
+    """Reproduce upstream squidly's ensemble-mode residue selection locally.
+
+    Upstream (squidly/squidly.py :: compute_uncertainties) selects positions
+    where ``mean[i] > mean_prob AND variance[i] < mean_var`` and joins the
+    (0-indexed) picked positions with '|'. We call this directly on the
+    per-residue ensemble arrays that the upstream worker DOES populate
+    correctly, to work around the upstream CLI's failure to propagate the
+    threshold flags to its inner worker.
+
+    Accepts list-of-floats or numpy array. Returns the same '|'-joined 0-indexed
+    residue string upstream would produce.
+    """
+    import numpy as _np
+    if mean is None or variance is None:
+        return ""
+    m = _np.asarray(mean, dtype=float)
+    v = _np.asarray(variance, dtype=float)
+    if m.size == 0 or v.size == 0 or m.shape != v.shape:
+        return ""
+    picks = _np.where((m > mean_prob) & (v < mean_var))[0]
+    return "|".join(str(int(p)) for p in picks)
+
+
 def _normalize_residues(value) -> str:
     """Coerce a Squidly residue prediction into a clean pipe-delimited string.
 
@@ -209,6 +233,44 @@ class Squidly(Step):
         ):
             if src in df_pred.columns:
                 df_pred[dst] = df_pred[src]
+
+        # TODO(squidly-upstream): remove this workaround block once the
+        # upstream squidly repo (https://github.com/WRiegs/Squidly) is fixed.
+        #
+        # Upstream bug: squidly's outer CLI (`squidly run`, defined in
+        # squidly/__main__.py) accepts --mean-prob / --mean-var as typer
+        # options, but when it builds the subprocess command lists that
+        # invoke the inner ensemble worker `squidly/squidly.py`, it omits
+        # these flags. See squidly/__main__.py in the `run` command, all four
+        # branches that build the `cmd = ['python', ...squidly.py, ...]`
+        # list (chunked/non-chunked x cpu/iterative/default). The inner
+        # worker's argparse defaults are 0.6 / 0.225 (squidly/squidly.py
+        # `create_parser`), so the outer CLI silently discards whatever the
+        # user asked for and always filters at 0.6 / 0.225.
+        #
+        # Consequence: enzymes without a canonical catalytic triad
+        # (e.g. flavin monooxygenases) get an empty Squidly_CR_Position no
+        # matter what threshold the user configured, which cascades into
+        # empty catalytic residues downstream and unrunnable docking sites.
+        #
+        # Workaround: when the user supplied a non-None mean_prob or
+        # mean_var, we recompute Squidly_CR_Position ourselves from the
+        # per-residue `mean` and `variance` arrays that the ensemble worker
+        # DID populate correctly, using the exact same rule the worker
+        # applies internally:
+        #     picked_indices = { i : mean[i] > mean_prob AND variance[i] < mean_var }
+        # (verified against squidly/squidly.py `compute_uncertainties`).
+        #
+        # This override is a no-op when the user leaves both thresholds at
+        # None, so behaviour is backward-compatible with upstream defaults.
+        if (self.mean_prob is not None or self.mean_var is not None) \
+                and "mean" in df_pred.columns and "variance" in df_pred.columns:
+            mp = self.mean_prob if self.mean_prob is not None else 0.6
+            mv = self.mean_var if self.mean_var is not None else 0.225
+            df_pred["Squidly_CR_Position"] = [
+                _select_residues_from_ensemble(m, v, mp, mv)
+                for m, v in zip(df_pred["mean"], df_pred["variance"])
+            ]
 
         # Broadcast predictions from the deduped representatives back to the
         # full input DataFrame, keyed by Sequence. This correctly handles

@@ -1,0 +1,71 @@
+# FMO 18-sequence full-pipeline run.
+#
+# All 18 rows: flavin-dependent monooxygenases with indole substrate and FAD
+# cofactor. Squidly runs with permissive thresholds (mean_prob 0.03, mean_var
+# 0.5) because the FMO family lacks a canonical catalytic triad -- squidly at
+# its defaults (0.6 / 0.225) predicts no residues for these enzymes (validated
+# on the gpu-multirow-02 run's ensemble outputs). At 0.03 / 0.5 the two
+# reference FMOs from gpu-multirow-02 return G11+L79 (F5SYD3) and L79
+# (A0A410H4M7); rows with zero residues are still co-folded by chai/boltz and
+# analysed downstream -- vina is skipped per-row.
+#
+# output_root / boltz_cache_dir / squidly_weights_dir / placer_env_path filled
+# from the `default` host profile at run time via `run --host default`.
+paths:
+  # Override the default host output_root so this run lands under
+  # /mnt/labs/data/mora/Luca/ instead of /mnt/labs/data/mora/structurezyme_runs/.
+  # Run dir is computed as {output_root}/{runtime.user}/{runtime.run_id}, so
+  # output_root=/mnt/labs/data/mora + user=Luca + run_id=fmo-fad-01 gives
+  # /mnt/labs/data/mora/Luca/fmo-fad-01.
+  output_root: /mnt/labs/data/mora
+  boltz_cache_dir: ''
+  squidly_weights_dir: null
+  input_csv: tools/fmo18/input_fmo18.pkl
+runtime:
+  user: Luca
+  run_id: fmo-fad-01
+  # KEEP at 1. External enzymetk Boltz/Chai steps np.array_split the frame
+  # across threads and reassign per-pose outputs by position; with num_threads
+  # > 1 this either crashes or stores list-wrapped cell values.
+  num_threads: 1
+  force: []
+steps:
+  squidly:
+    enabled: true
+    # lower mean_prob = more permissive; higher mean_var = accepts more
+    # disagreement between ensemble members.
+    squidly_mean_prob: 0.03
+    squidly_mean_var: 0.5
+  chai:
+    enabled: true
+  boltz:
+    enabled: true
+  vina:
+    enabled: true
+  docking_metrics:
+    enabled: true
+  prepare_files:
+    enabled: true
+  fastrelax:
+    enabled: true
+    fastrelax_top_k: 2
+    fastrelax_mode: ligand_focused
+  superimpose:
+    enabled: true
+  protein_rmsd:
+    enabled: true
+  ligand_rmsd:
+    enabled: true
+  geometric_filter:
+    enabled: true
+  fpocket:
+    enabled: true
+  ligand_sasa:
+    enabled: true
+  plip:
+    enabled: true
+  placer:
+    enabled: true
+    placer_predict_ligand: LIG
+    placer_nsamples: 50
+    placer_rerank: prmsd
