@@ -44,8 +44,20 @@ def parse_vina_output(file_path):
 
 
 def _vina_log_path(vina_dir, entry, substrate_name) -> Path:
-    """Build the path to the Vina log file written by `dock_vina()`."""
-    return Path(vina_dir) / f"{entry}-{substrate_name}_log.txt"
+    """Build the path to the Vina log file written by `dock_vina()`.
+
+    Historical note: the column name `vina_dir` is misleading. `Vina._execute`
+    (`structurezyme/steps/dock_vina_step.py`) appends `str(pdb_path)` — the
+    receptor PDB *file* path (`<label_dir>/<Entry>.pdb`) — to
+    `output_filenames`, which is then renamed to `vina_dir` in
+    `run_vina`/`_run_vina`. `PrepareVina` handles this correctly via
+    `vina_path.parent` / `vina_path.stem`. This helper mirrors that convention:
+    take the parent directory of whatever `vina_dir` points at so the log
+    lookup works whether the caller passes a file or a directory.
+    """
+    p = Path(vina_dir)
+    label_dir = p.parent if p.is_file() or p.suffix else p
+    return label_dir / f"{entry}-{substrate_name}_log.txt"
 
 
 def extract_chai_metrics(npz_path):
