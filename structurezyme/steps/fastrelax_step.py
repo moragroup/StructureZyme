@@ -26,8 +26,10 @@ from ..utils.helpers import valid_file_list
 from ..utils.ligand_params import (
     LigandParams,
     LigandParamsError,
+    build_atom_name_remap,
     canonical_smiles,
     generate_ligand_params,
+    rewrite_chain_atom_names,
 )
 from .step import Step
 
@@ -374,15 +376,23 @@ class FastRelax(Step):
         sub_target = _params_heavy(sub_expected)
         cof_target = _params_heavy(cof_expected)
 
+        # For each chain, record BOTH the target resname AND the SMILES
+        # + reference conformer PDB we'll use to remap atom names.
         chain_to_resname: dict[str, str] = {}
+        chain_to_ligand: dict[str, tuple[str, Path]] = {}
         for chain, count in chain_counts.items():
             hits = []
             if sub_target is not None and count == sub_target and sub_resname:
-                hits.append(("substrate", sub_resname))
+                hits.append(("substrate", sub_resname, sub_canon, sub_expected))
             if cof_target is not None and count == cof_target and cof_resname:
-                hits.append(("cofactor", cof_resname))
+                hits.append(("cofactor", cof_resname, cof_canon, cof_expected))
             if len(hits) == 1:
-                chain_to_resname[chain] = hits[0][1]
+                _, name, canon, params_p = hits[0]
+                chain_to_resname[chain] = name
+                # Reference conformer PDB sits next to the .params file
+                # under the same content-addressable cache dir.
+                ref_pdb = self._ligand_params[canon].conformer_pdb_paths[0]
+                chain_to_ligand[chain] = (canon, ref_pdb)
             elif len(hits) > 1:
                 logger.warning(
                     "FastRelax: chain %s has %d heavy atoms matching both "
@@ -398,7 +408,27 @@ class FastRelax(Step):
                     f"generic 29-atom LIG template and corrupt the ligand."
                 )
 
+        # First rewrite resnames, then per chain rewrite atom names to
+        # match the .params template. Order matters: atom-name remap
+        # reads the input text as-is; it does not care about resnames,
+        # but grouping the two passes here keeps the code linear.
         new_text = _rewrite_ligand_resnames(pdb_text, chain_to_resname)
+        for chain, (canon_smi, ref_pdb) in chain_to_ligand.items():
+            name_map = build_atom_name_remap(ref_pdb, new_text, chain, canon_smi)
+            if not name_map:
+                # Empty mapping means substructure match failed. Do NOT
+                # silently pass through -- the downstream Rosetta call
+                # would then fail with "too many tries in fill_missing_atoms"
+                # or, worse, load the ligand with wrong topology.
+                raise RuntimeError(
+                    f"FastRelax: could not build atom-name remap for chain "
+                    f"{chain} of {pdb_path} against reference {ref_pdb.name}. "
+                    f"Ligand SMILES: {canon_smi!r}. Common causes: PDB has "
+                    f"unexpected geometry that RDKit can't bond-order, or "
+                    f"missing atoms in the pose."
+                )
+            new_text = rewrite_chain_atom_names(new_text, chain, name_map)
+
         prepared = pdb_path.with_suffix(".for_pose.pdb")
         prepared.write_text(new_text)
         return prepared, sub_resname, cof_resname

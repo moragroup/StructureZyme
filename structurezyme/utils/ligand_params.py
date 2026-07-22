@@ -300,3 +300,161 @@ def generate_ligand_params(
             params_path=params_path,
             conformer_pdb_paths=_list_conformer_pdbs(work_dir, resname),
         )
+
+
+def _read_hetatm_atom_names(pdb_text: str) -> list[str]:
+    """Return HETATM atom names in file order.
+
+    Reads columns 13-16 of each HETATM line (PDB spec: "Atom name").
+    Whitespace is stripped so callers get bare tokens like ``"C1"``,
+    ``"N1"``, ``"C12"``.
+    """
+    names: list[str] = []
+    for line in pdb_text.splitlines():
+        if line.startswith("HETATM"):
+            names.append(line[12:16].strip())
+    return names
+
+
+def build_atom_name_remap(
+    reference_pdb: Path,
+    target_pdb_text: str,
+    target_chain: str,
+    smiles: str,
+) -> dict[str, str]:
+    """Compute an atom-name mapping from `target_pdb_text` -> `reference_pdb`.
+
+    Both PDBs contain the same small molecule (`smiles`); ``reference_pdb``
+    was produced by ``molfile_to_params.py`` and its atom names match the
+    ``.params`` file exactly. ``target_pdb_text`` is a docked-pose PDB
+    whose ligand atoms may use a different naming scheme (e.g. boltz
+    uses SMILES-kekulize order like ``C8, C9, C12, C15, N16, ...``).
+
+    Strategy: load both as RDKit mols (with proximity bonding on the
+    target since PDBs don't carry bond orders), infer bond orders on the
+    target using the SMILES as a template, then use RDKit's
+    ``GetSubstructMatch`` to find the atom-index bijection between
+    reference and target. Emit a ``{old_name -> new_name}`` dict.
+
+    Returns an empty dict on any failure -- caller should treat that as
+    "no rename possible" and log a warning.
+    """
+    try:
+        from rdkit import Chem
+        from rdkit.Chem import AllChem
+    except ImportError as e:
+        raise LigandParamsError("rdkit is required for atom-name remap") from e
+
+    # Extract just the ligand HETATMs on `target_chain` from the input PDB.
+    target_lines = [
+        line
+        for line in target_pdb_text.splitlines()
+        if line.startswith("HETATM") and len(line) > 21 and line[21] == target_chain
+    ]
+    if not target_lines:
+        return {}
+    target_block = "\n".join(target_lines) + "\nEND\n"
+
+    ref_pdb_text = Path(reference_pdb).read_text()
+
+    # Load both mols. removeHs=False so we can inspect original PDBResidueInfo
+    # for hydrogen atom names if we need to (currently we only map heavy
+    # atoms, since docked-pose PDBs typically don't carry ligand H's and
+    # Rosetta rebuilds them from the params template).
+    target_mol = Chem.MolFromPDBBlock(
+        target_block, sanitize=False, removeHs=False, proximityBonding=True
+    )
+    ref_mol = Chem.MolFromPDBBlock(
+        ref_pdb_text, sanitize=False, removeHs=False, proximityBonding=True
+    )
+    if target_mol is None or ref_mol is None:
+        return {}
+
+    # Remove H's BEFORE bond-order assignment. Rationale: the reference
+    # conformer PDB from molfile_to_params carries explicit H's on the
+    # aromatic N (e.g. indole N-H). AssignBondOrdersFromTemplate uses a
+    # heavy-atom-only SMILES template, so if we leave the explicit H on
+    # the N, the template's aromatic N + explicit H produces a valence
+    # error ("Explicit valence for atom N, 5, is greater than permitted").
+    # We only care about heavy-atom names anyway -- Rosetta fills H's
+    # from the params template.
+    target_noh = Chem.RemoveHs(target_mol, sanitize=False)
+    ref_noh = Chem.RemoveHs(ref_mol, sanitize=False)
+
+    # Assign bond orders from the SMILES template so aromaticity and
+    # ring-bond types line up. Without this, GetSubstructMatch on a
+    # PDB-parsed mol with all-single bonds against an aromatic template
+    # returns no match.
+    template = Chem.MolFromSmiles(smiles)
+    if template is None:
+        return {}
+    try:
+        target_fixed = AllChem.AssignBondOrdersFromTemplate(template, target_noh)
+        ref_fixed = AllChem.AssignBondOrdersFromTemplate(template, ref_noh)
+    except Exception as e:
+        logger.warning("build_atom_name_remap: bond-order assignment failed: %s", e)
+        return {}
+
+    # Substructure match on the heavy-atom skeleton.
+    match = target_fixed.GetSubstructMatch(template)
+    ref_match = ref_fixed.GetSubstructMatch(template)
+    if not match or not ref_match or len(match) != len(ref_match):
+        return {}
+
+    # For each template atom index i:
+    #   target atom idx  = match[i]      -> its PDB name in target
+    #   reference atom idx = ref_match[i] -> its PDB name in reference
+    mapping: dict[str, str] = {}
+    for template_idx in range(len(match)):
+        t_atom = target_fixed.GetAtomWithIdx(match[template_idx])
+        r_atom = ref_fixed.GetAtomWithIdx(ref_match[template_idx])
+        t_info = t_atom.GetPDBResidueInfo()
+        r_info = r_atom.GetPDBResidueInfo()
+        if t_info is None or r_info is None:
+            continue
+        old_name = t_info.GetName().strip()
+        new_name = r_info.GetName().strip()
+        if old_name and new_name:
+            mapping[old_name] = new_name
+
+    return mapping
+
+
+def rewrite_chain_atom_names(
+    pdb_text: str,
+    chain: str,
+    name_map: dict[str, str],
+) -> str:
+    """Rewrite the atom name (cols 13-16) of every HETATM line on `chain`
+    whose current atom name appears in `name_map`.
+
+    ``name_map`` is ``{old_name: new_name}``. Both are stripped, but the
+    output is padded/aligned to fit the fixed 4-char PDB atom-name field
+    following the same convention as ``pyrosetta``: names <= 3 chars
+    are right-padded with a leading space (col 13 is the element
+    alignment column), names of 4 chars fill the field exactly. Non-H
+    HETATMs are more permissive here since molfile_to_params-generated
+    names for our use case (indole, FAD) all fit in <= 3 chars.
+    """
+    def _pad(name: str) -> str:
+        # PDB atom-name field is 4 chars (cols 13-16, 0-indexed 12:16).
+        # Standard alignment: for names of length <= 3, place a leading
+        # space so col 13 (index 12) is blank and the element letter
+        # sits at col 14 (index 13). Names of length 4 fill the field.
+        if len(name) >= 4:
+            return name[:4]
+        return " " + name.ljust(3)
+
+    out: list[str] = []
+    for line in pdb_text.splitlines():
+        if (
+            line.startswith("HETATM")
+            and len(line) > 21
+            and line[21] == chain
+        ):
+            old = line[12:16].strip()
+            new = name_map.get(old)
+            if new is not None:
+                line = line[:12] + _pad(new) + line[16:]
+        out.append(line)
+    return "\n".join(out) + "\n"
