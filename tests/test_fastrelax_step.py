@@ -72,7 +72,7 @@ def test_select_top_k_missing_key_dropped():
 
 
 def test_validate_columns_raises_on_missing():
-    fr = FastRelax(output_dir="/tmp/fastrelax_out", ligand_resname="LIG")
+    fr = FastRelax(output_dir="/tmp/fastrelax_out")
     df = pd.DataFrame(
         {
             "Entry": ["a"],
@@ -88,7 +88,7 @@ def test_validate_columns_raises_on_missing():
 
 
 def test_rank_and_select_all_engines_per_row(tmp_path):
-    fr = FastRelax(output_dir="/tmp/fastrelax_out", ligand_resname="LIG", top_k=1)
+    fr = FastRelax(output_dir="/tmp/fastrelax_out", top_k=1)
 
     chai_files = [
         str(tmp_path / "E_0_chai.pdb"),
@@ -156,7 +156,7 @@ def test_execute_missing_column_raises(tmp_path):
     reusing `_validate_input`. This exercises only the top of `execute()`
     and needs no pyrosetta.
     """
-    fr = FastRelax(output_dir=str(tmp_path), ligand_resname="LIG")
+    fr = FastRelax(output_dir=str(tmp_path))
     df = pd.DataFrame(
         {
             "Entry": ["a"],
@@ -169,41 +169,15 @@ def test_execute_missing_column_raises(tmp_path):
         fr.execute(df)
 
 
-# --- FastRelax._relax_one (pyrosetta-gated smoke test) -----------------------
-
-
-# Real protein + HEM ligand fixture (3rgk, chain A, resnum 154). Uses
-# standard PDB atom names that Rosetta's built-in HEM params understand.
-# Used only by the gated smoke test below; other tests use tiny synthetic
-# data.
-_HEM_PDB_FIXTURE = Path("/mnt/labs/data/mora/software/PLACER/examples/inputs/3rgk.pdb")
-
-
-@pytest.mark.skipif(
-    not _pyrosetta_available(),
-    reason="pyrosetta is not importable in this environment",
-)
-def test_relax_one_smoke(tmp_path):
-    """End-to-end smoke test of `_relax_one`: relax a real HEM-bound PDB
-    and check that a relaxed PDB is written to disk and a numeric score
-    is returned.
-    """
-    if not _HEM_PDB_FIXTURE.exists():
-        pytest.skip(f"HEM PDB fixture not present at {_HEM_PDB_FIXTURE}")
-
-    fr = FastRelax(
-        output_dir=str(tmp_path),
-        ligand_resname="HEM",
-        mode="ligand_focused",
-        shell_radius=8.0,
-    )
-    relaxed_path, score = fr._relax_one(str(_HEM_PDB_FIXTURE))
-
-    assert Path(relaxed_path).exists()
-    assert isinstance(score, float)
-
-
 # --- FastRelax.execute (per-pose failure tolerance) --------------------------
+
+# NOTE: The previous HEM-based `_relax_one` smoke test (removed 2026-07)
+# assumed the OLD API where `_relax_one` accepted a single ligand
+# resname and Rosetta's built-in HEM params handled the chemistry.
+# The new API is DataFrame-driven -- see
+# `test_fastrelax_preserves_ligand_atoms.py` for the end-to-end
+# pyrosetta-gated regression test that covers `_relax_one` with real
+# 2-ligand (indole + FAD) input.
 
 
 def test_execute_relax_failure_keeps_original_path(tmp_path, monkeypatch):
@@ -213,17 +187,22 @@ def test_execute_relax_failure_keeps_original_path(tmp_path, monkeypatch):
     """
     fr = FastRelax(
         output_dir=str(tmp_path),
-        ligand_resname="LIG",
         top_k=1,
         drop_unrelaxed=False,  # so unselected paths are preserved too
     )
+
+    # Stub `_register_ligands` -- the real one does RDKit + subprocess
+    # work per unique SMILES, which is unnecessary here (we never let
+    # `_relax_one` actually run). This test targets the per-pose
+    # failure-tolerance contract of `execute()`, not params generation.
+    monkeypatch.setattr(FastRelax, "_register_ligands", lambda self, df: None)
 
     # Track that `_relax_one` was actually invoked (and always failed),
     # so we know we exercised `execute()`'s per-pose try/except and not
     # just some upstream filter.
     calls: list[str] = []
 
-    def _always_fail(self, pdb_path):
+    def _always_fail(self, pdb_path, substrate_smiles=None, cofactor_smiles=None):
         calls.append(str(pdb_path))
         raise RuntimeError("simulated relax failure")
 

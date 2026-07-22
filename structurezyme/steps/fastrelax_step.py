@@ -23,6 +23,12 @@ from typing import Literal
 import pandas as pd
 
 from ..utils.helpers import valid_file_list
+from ..utils.ligand_params import (
+    LigandParams,
+    LigandParamsError,
+    canonical_smiles,
+    generate_ligand_params,
+)
 from .step import Step
 
 logger = logging.getLogger(__name__)
@@ -86,6 +92,62 @@ def _select_top_k(paths: list[str], confidence: dict, engine: str, top_k: int) -
     return [p for p, _ in scored[:top_k]]
 
 
+def _assign_resname(prefix: str, index: int) -> str:
+    """Return a 3-letter code like `S01`, `C12`.
+
+    `prefix` is 'S' (substrate) or 'C' (cofactor). `index` is 1-based
+    and must fit in 2 digits (max 99 unique ligands per class per run,
+    which is plenty for enzyme screening).
+    """
+    if index < 1 or index > 99:
+        raise ValueError(
+            f"resname index out of range (1..99): {index}. Too many "
+            f"distinct ligands in one run."
+        )
+    return f"{prefix}{index:02d}"
+
+
+def _count_ligand_heavy_atoms_by_chain(pdb_text: str) -> dict[str, int]:
+    """Map each chain ID to the count of non-H HETATM atoms in it.
+
+    Used to match a PDB's ligand chains against expected SMILES atom
+    counts, so we can assign the right resname to each chain.
+    """
+    counts: dict[str, int] = {}
+    for line in pdb_text.splitlines():
+        if not line.startswith("HETATM"):
+            continue
+        element = line[76:78].strip() if len(line) >= 78 else ""
+        if not element:
+            atom_name = line[12:16].strip()
+            element = atom_name.lstrip("0123456789")[:1].upper()
+        if element == "H":
+            continue
+        chain = line[21]
+        counts[chain] = counts.get(chain, 0) + 1
+    return counts
+
+
+def _rewrite_ligand_resnames(
+    pdb_text: str,
+    chain_to_resname: dict[str, str],
+) -> str:
+    """Return `pdb_text` with HETATM residue names rewritten by chain.
+
+    For every HETATM line whose chain ID is a key of
+    `chain_to_resname`, replace the 3-letter residue name at columns
+    18-20 with the mapped code. Non-HETATM lines pass through
+    unchanged.
+    """
+    out_lines = []
+    for line in pdb_text.splitlines(keepends=False):
+        if line.startswith("HETATM") and line[21] in chain_to_resname:
+            new_resname = chain_to_resname[line[21]]
+            line = line[:17] + new_resname + line[20:]
+        out_lines.append(line)
+    return "\n".join(out_lines) + "\n"
+
+
 def _apply_relaxed_paths(
     files: list[str],
     selected: list[str],
@@ -131,7 +193,9 @@ class FastRelax(Step):
     def __init__(
         self,
         output_dir: str,
-        ligand_resname: str,
+        *,
+        substrate_smiles_col: str = "substrate_smiles",
+        cofactor_smiles_col: str = "cofactor_smiles",
         entry_col: str = "Entry",
         chai_files_col: str = "chai_files_for_superimposition",
         boltz_files_col: str = "boltz_files_for_superimposition",
@@ -148,7 +212,8 @@ class FastRelax(Step):
         num_threads: int = 1,
     ):
         self.output_dir = Path(output_dir)
-        self.ligand_resname = ligand_resname
+        self.substrate_smiles_col = substrate_smiles_col
+        self.cofactor_smiles_col = cofactor_smiles_col
         self.entry_col = entry_col
         self.chai_files_col = chai_files_col
         self.boltz_files_col = boltz_files_col
@@ -164,6 +229,13 @@ class FastRelax(Step):
         self.scorefunction = scorefunction
         self.num_threads = num_threads or 1
 
+        # Populated at execute() start; keyed by canonical SMILES.
+        # e.g. {"C1=CC=C2C(=C1)C=CN2": "S01", ...}
+        self._substrate_resnames: dict[str, str] = {}
+        self._cofactor_resnames: dict[str, str] = {}
+        # LigandParams objects by canonical SMILES, for -extra_res_fa init.
+        self._ligand_params: dict[str, LigandParams] = {}
+
     def _validate_input(self, df: pd.DataFrame) -> None:
         required = [
             self.entry_col,
@@ -177,18 +249,181 @@ class FastRelax(Step):
                 f"FastRelax input DataFrame is missing required columns: {missing}"
             )
 
-    def _relax_one(self, pdb_path) -> tuple[str, float]:
+    def _register_ligands(self, df: pd.DataFrame) -> None:
+        """Walk `df`, assign a unique 3-letter code per unique SMILES,
+        and generate a `.params` file for each.
+
+        Populates `self._substrate_resnames`, `self._cofactor_resnames`,
+        and `self._ligand_params`. Missing substrate SMILES on any row
+        is a hard error (FastRelax cannot run without a substrate).
+        Missing/empty cofactor SMILES is allowed and simply means that
+        row has no cofactor to relax.
+
+        Called once at the start of `execute()`; safe to call again on
+        the same instance (idempotent -- unique SMILES already
+        registered are reused).
+
+        Params files land in `self.output_dir / 'params'`.
+        """
+        params_dir = self.output_dir / "params"
+        params_dir.mkdir(parents=True, exist_ok=True)
+
+        substrate_col = self.substrate_smiles_col
+        cofactor_col = self.cofactor_smiles_col
+
+        if substrate_col not in df.columns:
+            raise ValueError(
+                f"FastRelax requires a substrate SMILES column "
+                f"{substrate_col!r}; DataFrame columns are {list(df.columns)}"
+            )
+
+        # Substrate: hard-required per row.
+        for idx, smi in enumerate(df[substrate_col].tolist()):
+            if smi is None or (isinstance(smi, str) and not smi.strip()):
+                raise ValueError(
+                    f"FastRelax row {idx} has empty/None substrate SMILES "
+                    f"in column {substrate_col!r}; substrate is required"
+                )
+            canon = canonical_smiles(smi)
+            if canon in self._substrate_resnames:
+                continue
+            # 'X' prefix avoids collision with Rosetta's built-in
+            # non-canonical amino acid codes (A/B/C/G/M/S/U/V families).
+            resname = _assign_resname("X", len(self._substrate_resnames) + 1)
+            self._substrate_resnames[canon] = resname
+            self._ligand_params[canon] = generate_ligand_params(
+                smiles=smi, resname=resname, cache_dir=params_dir,
+            )
+            logger.info(
+                "FastRelax registered substrate %s -> %s", canon, resname,
+            )
+
+        # Cofactor: optional. Missing column or empty entries are fine.
+        if cofactor_col in df.columns:
+            for smi in df[cofactor_col].tolist():
+                if smi is None or (isinstance(smi, str) and not smi.strip()):
+                    continue
+                canon = canonical_smiles(smi)
+                if canon in self._cofactor_resnames:
+                    continue
+                # 'Z' prefix avoids collision with Rosetta's built-in
+                # non-canonical amino acid codes (see substrate note above).
+                resname = _assign_resname("Z", len(self._cofactor_resnames) + 1)
+                self._cofactor_resnames[canon] = resname
+                self._ligand_params[canon] = generate_ligand_params(
+                    smiles=smi, resname=resname, cache_dir=params_dir,
+                )
+                logger.info(
+                    "FastRelax registered cofactor %s -> %s", canon, resname,
+                )
+
+    def _prepare_pdb_for_pose(
+        self,
+        pdb_path: str | Path,
+        substrate_smiles: str | None,
+        cofactor_smiles: str | None,
+    ) -> tuple[Path, str | None, str | None]:
+        """Rewrite the input PDB's ligand resnames to the codes we
+        assigned in `_register_ligands`, and drop the result next to
+        the original with a `.for_pose.pdb` suffix.
+
+        Returns `(prepared_pdb_path, substrate_resname, cofactor_resname)`.
+        A resname is `None` if the corresponding SMILES was
+        `None`/empty or if no matching HETATM chain was found.
+
+        Chain-to-ligand assignment: for each HETATM chain in the PDB,
+        count non-H atoms and match against the expected heavy-atom
+        count of substrate and cofactor. Ties are unusual (substrate
+        and cofactor with identical heavy-atom counts) but if they
+        happen we skip the ambiguous rename and log a warning.
+
+        Raises `RuntimeError` if the input PDB has HETATM chains that
+        don't match either registered ligand -- silently letting them
+        through would recreate the original bug (they'd fall back to
+        pdb_LIG's 29-atom template).
+        """
+        pdb_path = Path(pdb_path)
+        pdb_text = pdb_path.read_text()
+        chain_counts = _count_ligand_heavy_atoms_by_chain(pdb_text)
+
+        sub_canon = canonical_smiles(substrate_smiles) if substrate_smiles else None
+        cof_canon = canonical_smiles(cofactor_smiles) if cofactor_smiles else None
+
+        sub_resname = self._substrate_resnames.get(sub_canon) if sub_canon else None
+        cof_resname = self._cofactor_resnames.get(cof_canon) if cof_canon else None
+
+        sub_expected = (
+            self._ligand_params[sub_canon].params_path if sub_canon else None
+        )
+        cof_expected = (
+            self._ligand_params[cof_canon].params_path if cof_canon else None
+        )
+
+        def _params_heavy(params_path: Path | None) -> int | None:
+            if params_path is None:
+                return None
+            n = 0
+            for line in params_path.read_text().splitlines():
+                if not line.startswith("ATOM"):
+                    continue
+                parts = line.split()
+                if len(parts) >= 2 and not parts[1].startswith("H"):
+                    n += 1
+            return n
+
+        sub_target = _params_heavy(sub_expected)
+        cof_target = _params_heavy(cof_expected)
+
+        chain_to_resname: dict[str, str] = {}
+        for chain, count in chain_counts.items():
+            hits = []
+            if sub_target is not None and count == sub_target and sub_resname:
+                hits.append(("substrate", sub_resname))
+            if cof_target is not None and count == cof_target and cof_resname:
+                hits.append(("cofactor", cof_resname))
+            if len(hits) == 1:
+                chain_to_resname[chain] = hits[0][1]
+            elif len(hits) > 1:
+                logger.warning(
+                    "FastRelax: chain %s has %d heavy atoms matching both "
+                    "substrate (%s) and cofactor (%s); skipping rename",
+                    chain, count, sub_resname, cof_resname,
+                )
+            else:
+                raise RuntimeError(
+                    f"FastRelax: {pdb_path} chain {chain} has {count} heavy "
+                    f"atoms, matching neither substrate ({sub_target}) nor "
+                    f"cofactor ({cof_target}). Cannot safely assign a "
+                    f"3-letter code -- Rosetta would fall back to the "
+                    f"generic 29-atom LIG template and corrupt the ligand."
+                )
+
+        new_text = _rewrite_ligand_resnames(pdb_text, chain_to_resname)
+        prepared = pdb_path.with_suffix(".for_pose.pdb")
+        prepared.write_text(new_text)
+        return prepared, sub_resname, cof_resname
+
+    def _relax_one(
+        self,
+        pdb_path,
+        substrate_smiles: str | None = None,
+        cofactor_smiles: str | None = None,
+    ) -> tuple[str, float]:
         """Relax one PDB with PyRosetta's FastRelax mover.
 
         Returns `(relaxed_pdb_path, final_score)`. Raises on error --
         `execute()` wraps calls in try/except so per-pose failures don't
         abort the run.
 
+        `substrate_smiles` / `cofactor_smiles` are the row's ligand
+        SMILES; they select which `.params` file was assigned to each
+        chain and drive the LIG-to-code rename applied before
+        `pose_from_pdb`. Must be set unless the pose really has no
+        non-canonical ligand (e.g. protein-only relaxation) -- in
+        which case skip this method entirely.
+
         `pyrosetta` is imported lazily inside this method so that
-        `import structurezyme` doesn't require PyRosetta. If the import
-        fails, a clear `RuntimeError` is raised pointing the user at
-        the shared installer location (per the spec's "Shared Software
-        Locations" section).
+        `import structurezyme` doesn't require PyRosetta.
         """
         try:
             import pyrosetta
@@ -202,10 +437,26 @@ class FastRelax(Step):
         global _pyrosetta_initialized
         try:
             if not _pyrosetta_initialized:
-                pyrosetta.init(silent=True)
+                # Pass every registered params file to Rosetta via
+                # -extra_res_fa. Without this Rosetta silently maps any
+                # unknown LIG residue to a 29-atom generic template and
+                # corrupts the ligand chemistry. See docs/known-issues.md.
+                extra_res_fa = " ".join(
+                    str(lp.params_path) for lp in self._ligand_params.values()
+                )
+                init_opts = "-mute all"
+                if extra_res_fa:
+                    init_opts = f"{init_opts} -extra_res_fa {extra_res_fa}"
+                pyrosetta.init(extra_options=init_opts, silent=True)
                 _pyrosetta_initialized = True
 
-            pose = pyrosetta.pose_from_pdb(str(pdb_path))
+            prepared_pdb, sub_resname, cof_resname = self._prepare_pdb_for_pose(
+                pdb_path, substrate_smiles, cofactor_smiles,
+            )
+            pose = pyrosetta.pose_from_pdb(str(prepared_pdb))
+            # Ligand resname used by ligand_focused mode's neighborhood
+            # selector. Prefer the substrate; fall back to the cofactor.
+            ligand_resname_for_selector = sub_resname or cof_resname
 
             movemap = None
             movemap_factory = None
@@ -223,8 +474,14 @@ class FastRelax(Step):
                     CoordinateConstraintGenerator,
                 )
 
+                if ligand_resname_for_selector is None:
+                    raise RuntimeError(
+                        f"FastRelax mode='ligand_focused' requires either "
+                        f"a substrate or cofactor SMILES on the row; both "
+                        f"were empty for {pdb_path}."
+                    )
                 ligand_sel = ResidueNameSelector()
-                ligand_sel.set_residue_name3(self.ligand_resname)
+                ligand_sel.set_residue_name3(ligand_resname_for_selector)
                 shell_sel = NeighborhoodResidueSelector(
                     ligand_sel, self.shell_radius, True
                 )
@@ -273,6 +530,10 @@ class FastRelax(Step):
 
     def execute(self, df: pd.DataFrame) -> pd.DataFrame:
         self._validate_input(df)
+        # Assign a unique 3-letter code per unique SMILES and generate
+        # a .params file for each. Must run before PyRosetta init so
+        # -extra_res_fa can reference every params file up-front.
+        self._register_ligands(df)
 
         # Per-row selection: build a dict[engine, list[selected_paths]]
         # for each row. This step is pyrosetta-independent and lets us
@@ -297,13 +558,19 @@ class FastRelax(Step):
         for row_idx, (df_idx, row) in enumerate(df.iterrows()):
             selected = per_row_selected[row_idx]
             fastrelax_score: dict = {"chai": {}, "boltz": {}, "vina": {}}
+            row_sub_smiles = row.get(self.substrate_smiles_col)
+            row_cof_smiles = row.get(self.cofactor_smiles_col)
 
             for engine, files_col in engine_specs:
                 selected_paths = selected.get(engine, [])
                 relaxed_map: dict = {}
                 for path in selected_paths:
                     try:
-                        relaxed_path, score = self._relax_one(path)
+                        relaxed_path, score = self._relax_one(
+                            path,
+                            substrate_smiles=row_sub_smiles,
+                            cofactor_smiles=row_cof_smiles,
+                        )
                     except Exception as e:
                         logger.error(
                             "FastRelax: skipping pose %s for engine %s: %s",

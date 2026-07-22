@@ -348,7 +348,11 @@ def test_run_fastrelax_constructs_fastrelax_step_correctly(tmp_path, monkeypatch
     assert kwargs["shell_radius"] == 10.0
     assert kwargs["constraint_weight"] == 0.5
     assert kwargs["scorefunction"] == "beta_nov16"
-    assert kwargs["ligand_resname"] == "ABC"
+    # ligand_resname is no longer threaded to FastRelax: the new API is
+    # DataFrame-driven (per-row substrate_smiles / cofactor_smiles) with
+    # auto-generated params per unique SMILES. Superimposition still
+    # accepts the legacy kwarg for backward compatibility.
+    assert "ligand_resname" not in kwargs
     assert kwargs["num_threads"] == 4
     assert Path(kwargs["output_dir"]) == Path(tmp_path) / "fastrelax"
 

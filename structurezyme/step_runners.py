@@ -483,7 +483,6 @@ def run_fastrelax(ctx, spec) -> pd.DataFrame:
         shell_radius=opts.get("fastrelax_shell_radius", 8.0),
         constraint_weight=opts.get("fastrelax_constraint_weight", 1.0),
         scorefunction=opts.get("fastrelax_scorefunction", "ref2015"),
-        ligand_resname=opts.get("ligand_resname", "LIG"),
         num_threads=num_threads,
     )
     df_relaxed = step.execute(df_prep)

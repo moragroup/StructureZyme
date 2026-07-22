@@ -249,6 +249,13 @@ models/
 *.npz
 *.pkl
 
+# Whitelist small fixture files that are required to run the test suite.
+# These live only under tests/fixtures/ and are intentionally kept small
+# (see e.g. tests/fixtures/fastrelax/F5SYD3_2_chai_min.pdb, ~38 KB).
+!tests/fixtures/**/*.pdb
+!tests/fixtures/**/*.cif
+!tests/fixtures/**/*.pkl
+
 .kilo/
 .kilo-tmp/
 

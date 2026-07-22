@@ -322,7 +322,6 @@ class Superimposition:
             shell_radius=self.fastrelax_shell_radius,
             constraint_weight=self.fastrelax_constraint_weight,
             scorefunction=self.fastrelax_scorefunction,
-            ligand_resname=self.ligand_resname,
             num_threads=self.num_threads,
         )
         return step.execute(df_prep)
@@ -537,7 +536,6 @@ class Pipeline:
             fastrelax_shell_radius=fastrelax_shell_radius,
             fastrelax_constraint_weight=fastrelax_constraint_weight,
             fastrelax_scorefunction=fastrelax_scorefunction,
-            ligand_resname=ligand_resname,
         )
         placer_opts = dict(
             placer_predict_ligand=placer_predict_ligand,
