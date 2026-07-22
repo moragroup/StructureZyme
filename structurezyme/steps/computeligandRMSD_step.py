@@ -101,6 +101,18 @@ def compute_normalized_ligand_rmsd_stats(rmsd_df: pd.DataFrame):
     """
     from itertools import combinations_with_replacement
 
+    # Degrade gracefully when every pose pair failed RDKit processing
+    # upstream (e.g. valence errors on corrupted ligands). Without this
+    # guard, indexing `rmsd_df["tool1"]` on a 0-column DataFrame raises
+    # KeyError and takes down the whole pipeline.
+    if rmsd_df.empty or "tool1" not in rmsd_df.columns:
+        logger.warning(
+            "compute_normalized_ligand_rmsd_stats received an empty "
+            "DataFrame (all pose pairs likely failed upstream). "
+            "Returning an empty stats DataFrame."
+        )
+        return rmsd_df
+
     # Ensure lowercase and clean tool names
     rmsd_df["tool1"] = rmsd_df["tool1"].str.strip().str.lower()
     rmsd_df["tool2"] = rmsd_df["tool2"].str.strip().str.lower()
