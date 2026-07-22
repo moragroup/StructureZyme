@@ -218,6 +218,37 @@ def extract_ligand_from_PDB(input_pdb, output_pdb, ligand_resname):
     io.save(str(output_pdb), LigandSelect(ligand_resname))
 
 
+_TOOL_SUFFIXES = ("vina", "chai", "boltz")
+
+
+def _pose_id_from_structure_name(full_name: str) -> str:
+    """Recover the docking-metrics dict key (pose id) from a `docked_structure` name.
+
+    `docking_metrics` stores per-Entry dicts keyed by pose id, e.g.
+    ``chai_ptm = {"F5SYD3_0": 0.92, ..., "F5SYD3_4": 0.92}`` and
+    ``boltz2_confidence_score = {"F5SYD3_model_0": 0.97}``.
+
+    Downstream steps rename poses with tool + optional relaxed suffixes:
+    ``<Entry>_<pose_id>_<tool>`` and, after fastrelax,
+    ``<Entry>_<pose_id>_<tool>_relaxed``.
+
+    To recover ``<Entry>_<pose_id>`` (which matches the dict keys), strip
+    a trailing ``_relaxed`` if present, then strip a trailing ``_{tool}``
+    if it matches one of ``{"vina", "chai", "boltz"}``.
+
+    Regression note (fmo-fad-01, 2026-07-22): the previous
+    single-underscore rsplit yielded ``<Entry>_<pose_id>_<tool>`` for
+    relaxed poses, which never matched any dict key, silently NaN-ing
+    every ``chai_*`` column on all 72 ligand_rmsd rows.
+    """
+    if full_name.endswith("_relaxed"):
+        full_name = full_name[: -len("_relaxed")]
+    parts = full_name.rsplit("_", 1)
+    if len(parts) == 2 and parts[1] in _TOOL_SUFFIXES:
+        return parts[0]
+    return full_name
+
+
 def add_metrics(best_structures_df, df_dockmetrics):
     """
     Merges docking metrics from df_dockmetrics into best_structures_df based on the 'Entry' column.
@@ -236,13 +267,17 @@ def add_metrics(best_structures_df, df_dockmetrics):
     # These are the dict-valued metric columns to extract from
     dict_columns = chai_columns + boltz_columns
 
+    # Kept as a thin wrapper for readability; delegates to the module-level
+    # helper so `add_metrics` and `extract_docking_metrics` share one source
+    # of truth for pose-id derivation.
     def extract_structure_id(full_name):
-        parts = full_name.split("_")
-        if parts[-1] in {"vina", "chai", "boltz"}:
-            return "_".join(parts[:-1])
-        return full_name
+        return _pose_id_from_structure_name(full_name)
 
     def extract_vina_index(structure):
+        # Vina pose names are `<Entry>_<idx>_vina[_relaxed]`; strip the
+        # optional `_relaxed` before pulling out the numeric pose index.
+        if structure.endswith("_relaxed"):
+            structure = structure[: -len("_relaxed")]
         if structure.endswith("_vina"):
             try:
                 return int(structure.split("_")[-2])
@@ -322,11 +357,21 @@ def extract_docking_metrics(df: pd.DataFrame) -> pd.DataFrame:
 
     out = df.copy()
 
-    # structure_id: everything before the final underscore
-    out["structure_id"] = out["docked_structure"].astype(str).str.rsplit("_", n=1).str[0]
+    # structure_id: match the docking_metrics dict keys by stripping the
+    # optional `_relaxed` and trailing `_{tool}` suffixes. See
+    # `_pose_id_from_structure_name` for the full contract and the
+    # fmo-fad-01 regression that motivated the shared helper.
+    out["structure_id"] = out["docked_structure"].astype(str).apply(
+        _pose_id_from_structure_name
+    )
 
-    # id just before the final part (e.g. pose index for vina)
-    out["vina_id"] = out["docked_structure"].astype(str).str.split("_").str[-2]
+    # vina_id: numeric pose index used to key into `vina_affinities`.
+    # Vina names are `<Entry>_<idx>_vina[_relaxed]`; strip the optional
+    # `_relaxed` before pulling out the index (originally at position -2).
+    _vina_stem = out["docked_structure"].astype(str).str.replace(
+        r"_relaxed$", "", regex=True
+    )
+    out["vina_id"] = _vina_stem.str.split("_").str[-2]
     out["vina_id"] = pd.to_numeric(out["vina_id"], errors="coerce")
 
     # tool masks
