@@ -249,7 +249,14 @@ class DockingMetrics(Step):
             # ---Extract vina docking metrics---
             vina_affinities = {}
             vina_dir_val = row.get('vina_dir')
-            if vina_dir_val and pd.notna(vina_dir_val):
+            # pd.notna FIRST: with `x and pd.notna(x)` python evaluates `x`
+            # first, and if x is pd.NA the short-circuit path raises
+            # `TypeError: boolean value of NA is ambiguous` before pd.notna
+            # gets a chance. Runs where vina is skipped for every row (e.g.
+            # halogenases where squidly returns no residues) populate
+            # `vina_dir` with pd.NA, which triggered the crash. pd.notna
+            # returns a plain bool so ordering it first makes the guard safe.
+            if pd.notna(vina_dir_val) and vina_dir_val:
                 log_path = _vina_log_path(vina_dir_val, entry_name, ligand_name)
                 if log_path.exists():
                     try:
