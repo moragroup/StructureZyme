@@ -120,6 +120,22 @@ def _build_mol_file(smiles: str, mol_path: Path, seed: int = 42) -> None:
     On embed failure, retries once with `useRandomCoords=True` and
     `maxAttempts=1000`. Raises `LigandParamsError` if both attempts
     fail.
+
+    Special case: ligands with < 3 heavy atoms (e.g. isolated metal
+    ions like ``[Cu+2]``, ``[Zn+2]``) go through a separate code path
+    that pads them with virtual atoms up to 3 total. Rosetta's
+    ``molfile_to_params.py`` refuses fragments smaller than 3 atoms,
+    but explicitly documents "add virtual atoms to make 3 total" as
+    the sanctioned workaround. Virtual atoms have Rosetta atom type
+    ``VIRT`` (zero vdW, zero charge, no bonded interactions), so the
+    chemistry of the real metal atom is preserved -- only its
+    geometric frame is anchored by the phantoms. See
+    ``docs/known-issues.md`` and ``rosetta_tools/molfile_to_params.py``
+    line 660 for the underlying constraint. Post-processing
+    ``molfile_to_params.py`` also credits the metal's full formal
+    charge to the metal (rather than diluting it across the padding
+    atoms) because Rosetta assigns ``VIRT`` types zero charge before
+    naive-charge offset redistribution.
     """
     try:
         from rdkit import Chem
@@ -132,6 +148,11 @@ def _build_mol_file(smiles: str, mol_path: Path, seed: int = 42) -> None:
     mol = Chem.MolFromSmiles(smiles)
     if mol is None:
         raise LigandParamsError(f"could not parse SMILES: {smiles!r}")
+
+    if mol.GetNumHeavyAtoms() < 3:
+        _write_padded_mol_file(mol, mol_path)
+        return
+
     mol = Chem.AddHs(mol)
 
     # First attempt: default ETKDG.
@@ -161,6 +182,98 @@ def _build_mol_file(smiles: str, mol_path: Path, seed: int = 42) -> None:
 
     Chem.Kekulize(mol, clearAromaticFlags=True)
     Chem.MolToMolFile(mol, str(mol_path))
+
+
+def _write_padded_mol_file(mol, mol_path: Path) -> None:
+    """Write a V2000 mol file for a ligand with < 3 heavy atoms, padded
+    with virtual atoms so Rosetta's ``molfile_to_params.py`` accepts it.
+
+    Strategy: use RDKit to build a mol with the real atom(s) plus enough
+    hydrogen placeholder atoms to reach 3 total, place all atoms on
+    orthogonal 1.5 A axes for a well-conditioned initial geometry, write
+    the mol file, then re-edit each placeholder atom's element field
+    (V2000 columns 31-33) from ``"H  "`` to ``"V  "``. When
+    ``molfile_to_params.py`` reads the file it names atoms after their
+    element field, so the placeholders end up named ``V1``, ``V2``; its
+    ``find_virtual_atoms`` treats any atom whose name starts with ``V``
+    as virtual, tagging them with the ``VIRT`` Rosetta atom type. Using
+    hydrogens as the RDKit-level placeholder is only a mol-file writing
+    trick -- the resulting ``.params`` has proper virtual atoms.
+    """
+    try:
+        from rdkit import Chem
+    except ImportError as e:
+        raise LigandParamsError(
+            "rdkit is required for ligand params generation"
+        ) from e
+
+    n_heavy = mol.GetNumHeavyAtoms()
+    if n_heavy < 1:
+        raise LigandParamsError(
+            f"cannot generate params for empty molecule (0 heavy atoms)"
+        )
+
+    rw = Chem.RWMol(mol)
+    n_pad = 3 - n_heavy
+
+    # Place real atoms first. For a single heavy atom sit it at origin;
+    # for two heavy atoms place the first at origin and the second at
+    # (1.5, 0, 0). Padding atoms fill the remaining axes at 1.5 A.
+    real_positions = [(0.0, 0.0, 0.0), (1.5, 0.0, 0.0)]
+    pad_positions = [(0.0, 1.5, 0.0), (0.0, 0.0, 1.5)]
+    positions: list[tuple[float, float, float]] = list(real_positions[:n_heavy])
+    pad_indices: list[int] = []
+    for k in range(n_pad):
+        # Add H placeholder atom bonded to atom 0 (any real atom will do
+        # -- Rosetta only needs a connected fragment; bonds to virtuals
+        # carry no energy).
+        placeholder = Chem.Atom(1)
+        idx = rw.AddAtom(placeholder)
+        rw.AddBond(0, idx, Chem.BondType.SINGLE)
+        pad_indices.append(idx)
+        positions.append(pad_positions[k])
+
+    # Assign the 3D conformer explicitly (single-atom mols can't be
+    # ETKDG-embedded, so we set coords by hand).
+    conf = Chem.Conformer(rw.GetNumAtoms())
+    for i, xyz in enumerate(positions):
+        conf.SetAtomPosition(i, xyz)
+    rw.AddConformer(conf, assignId=True)
+
+    Chem.MolToMolFile(rw, str(mol_path), kekulize=False)
+
+    # Post-edit: rewrite each padding atom's V2000 element field to "V ".
+    # V2000 atom block starts at line index 4 (0=blank, 1=RDKit banner,
+    # 2=blank, 3=counts line). Each atom line has element at cols 31-33
+    # (0-indexed 31:34, 3-char field).
+    text = mol_path.read_text()
+    lines = text.splitlines()
+
+    # Drop a sidecar marker with the padding-atom indices so
+    # _warn_on_silent_virtualization can distinguish deliberate padding
+    # from silent virtualization of real elements (e.g. real vanadium
+    # in the input SMILES). File contains one 0-indexed atom index per
+    # line; empty file means no padding occurred (never written for
+    # non-padded ligands).
+    marker_path = mol_path.with_suffix(mol_path.suffix + ".padded")
+    marker_path.write_text(
+        "\n".join(str(i) for i in pad_indices) + "\n"
+    )
+
+    for pad_idx in pad_indices:
+        line_no = 4 + pad_idx
+        line = lines[line_no]
+        if len(line) < 34:
+            raise LigandParamsError(
+                f"padded mol file line {line_no} shorter than expected "
+                f"(len={len(line)}); RDKit V2000 layout has changed"
+            )
+        lines[line_no] = line[:31] + "V  " + line[34:]
+    mol_path.write_text("\n".join(lines) + "\n")
+    logger.info(
+        "wrote padded mol file %s (heavy=%d, padded to 3 with %d virtual atoms)",
+        mol_path, n_heavy, n_pad,
+    )
 
 
 def _run_molfile_to_params(mol_path: Path, resname: str, work_dir: Path) -> None:
@@ -211,6 +324,132 @@ def _run_molfile_to_params(mol_path: Path, resname: str, work_dir: Path) -> None
         raise LigandParamsError(
             f"molfile_to_params.py exited 0 but did not produce {expected} "
             f"(stdout tail: {proc.stdout[-500:] if proc.stdout else '<empty>'})"
+        )
+
+    # Sanity check: warn if the tool silently virtualized real (non-padding)
+    # atoms. The most common trigger is vanadium: molfile_to_params names
+    # atoms after their element, then treats any atom whose name starts
+    # with 'V' or 'X' as virtual (see vendor/rosetta_tools/molfile_to_params.py
+    # ~line 173 -- comment explicitly acknowledges the collision with the
+    # V element symbol). Other transition metals outside its recognized set
+    # {Fe, Zn, Co, Cu} may also hit unexpected typing. Downstream FastRelax
+    # will still run correctly, but the caller should know that these atoms
+    # contribute nothing to the force field.
+    _warn_on_silent_virtualization(expected, mol_path, resname)
+
+
+def _warn_on_silent_virtualization(
+    params_path: Path, mol_path: Path, resname: str
+) -> None:
+    """Log a WARNING for each real atom that got typed ``VIRT`` in the
+    generated ``.params`` file.
+
+    "Real" means "present as a real element in the input mol file, not one
+    of the virtual padding atoms we inject for < 3-heavy-atom ligands."
+    We reconstruct the set of real element symbols by parsing the mol file
+    we handed to ``molfile_to_params.py`` and excluding any atom whose
+    element field is exactly ``"V "`` at cols 31-33 of the atom block
+    (that's the padding-atom marker we write in ``_write_padded_mol_file``;
+    real vanadium in the input would appear as ``"V "`` too, but for real
+    vanadium the caller wants exactly this warning, so we count it as a
+    real atom).
+
+    Detection heuristic: parse the mol file's V2000 atom block for real
+    element symbols, then parse the params file for ``ATOM <name> <type>``
+    triplets. Any atom whose Rosetta type is ``VIRT`` but whose element
+    (inferred from atom name or the mol file's real-atom count) matches a
+    real element in the input is reported. In practice the only cases
+    that trigger this today are Vanadium (element name collision) and
+    exotic transition metals outside ``{Fe, Zn, Co, Cu}``; both warrant
+    the same "this atom contributes nothing to the force field" caveat.
+
+    Best-effort: any parsing failure produces a DEBUG log and returns
+    without warning. The params file has already been produced; a bad
+    warning check must not block the pipeline.
+    """
+    try:
+        # Parse mol file for real (non-padding) elements. Atom block starts
+        # at line 4 (0-indexed); atom count is in cols 0-2 of line 3.
+        mol_lines = mol_path.read_text().splitlines()
+        if len(mol_lines) < 4:
+            logger.debug("mol file %s too short to parse", mol_path)
+            return
+        try:
+            n_atoms = int(mol_lines[3][:3])
+        except (ValueError, IndexError):
+            logger.debug("mol file %s has malformed counts line", mol_path)
+            return
+
+        # Consult the padding marker (written by _write_padded_mol_file)
+        # so we don't mis-blame deliberate padding as silent virtualization.
+        # Atom indices in the marker are 0-based mol-file atom indices.
+        marker_path = mol_path.with_suffix(mol_path.suffix + ".padded")
+        padded_indices: set[int] = set()
+        if marker_path.exists():
+            for line in marker_path.read_text().splitlines():
+                s = line.strip()
+                if s:
+                    try:
+                        padded_indices.add(int(s))
+                    except ValueError:
+                        pass
+
+        real_elements: list[str] = []
+        for i in range(4, 4 + n_atoms):
+            if i >= len(mol_lines):
+                break
+            atom_idx = i - 4
+            if atom_idx in padded_indices:
+                continue  # skip our injected virtual-padding atoms
+            line = mol_lines[i]
+            if len(line) < 34:
+                continue
+            elem = line[31:34].strip()
+            real_elements.append(elem)
+
+        # Parse the params file for ATOM lines. Format:
+        #   ATOM <name> <rosetta_type> <mm_type> <charge>
+        # We care about atoms with rosetta_type == 'VIRT'.
+        for line in params_path.read_text().splitlines():
+            if not line.startswith("ATOM"):
+                continue
+            parts = line.split()
+            if len(parts) < 3:
+                continue
+            atom_name = parts[1]
+            rosetta_type = parts[2]
+            if rosetta_type != "VIRT":
+                continue
+            # Padding-atom names look like 'X1', 'X2' (molfile_to_params
+            # renames V-prefixed elements to X-prefixed atom names).
+            # Real virtualized atoms that used to be real elements
+            # (vanadium etc.) also get X-prefixed names, so we can't
+            # distinguish by name alone. Instead: if any real element in
+            # the mol file is one that Rosetta's molfile_to_params does
+            # NOT recognize as a first-class metal (Fe/Zn/Co/Cu) yet
+            # would get a real atom type otherwise, warn.
+            recognized_metals = {"Fe", "Zn", "Co", "Cu"}
+            suspect_elements = [
+                e for e in real_elements
+                if e in {"V", "Mn", "Ni", "Cr", "Mo", "W", "Ru", "Rh", "Pd"}
+                or (len(e) >= 1 and e[0].isupper() and e not in recognized_metals
+                    and e not in {"C", "N", "O", "H", "S", "P", "F", "Cl", "Br", "I"})
+            ]
+            if suspect_elements:
+                logger.warning(
+                    "Ligand %s (%s): atom %s got Rosetta type VIRT and will "
+                    "contribute zero force-field energy. Likely cause: input "
+                    "contains element(s) %s that Rosetta's molfile_to_params "
+                    "either doesn't recognize or name-collides with its "
+                    "virtual-atom convention. Downstream FastRelax will still "
+                    "run but this atom acts only as a geometric anchor.",
+                    resname, mol_path.name, atom_name,
+                    ", ".join(sorted(set(suspect_elements))),
+                )
+                return  # one warning per params file is enough
+    except Exception as e:  # pragma: no cover - defensive
+        logger.debug(
+            "silent-virtualization check failed for %s: %s", params_path, e,
         )
 
 

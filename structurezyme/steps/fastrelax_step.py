@@ -362,6 +362,20 @@ class FastRelax(Step):
         )
 
         def _params_heavy(params_path: Path | None) -> int | None:
+            """Count real (non-virtual, non-H) atoms in a Rosetta .params file.
+
+            Skips both hydrogens (atom name starts with 'H') and virtual
+            atoms (Rosetta type field == 'VIRT'). The virtual-atom skip
+            matters for ligands padded up to 3 total atoms via
+            _write_padded_mol_file in ligand_params.py -- e.g. a [Cu+2]
+            params has 1 real Cu plus 2 VIRT X1/X2 padding atoms. Without
+            this filter the params heavy count (3) would not match the
+            pose PDB heavy count (1), causing the chain-assignment loop
+            below to reject the row.
+
+            Params file ATOM line format:
+              ATOM <name> <rosetta_type> <mm_type> <charge>
+            """
             if params_path is None:
                 return None
             n = 0
@@ -369,8 +383,15 @@ class FastRelax(Step):
                 if not line.startswith("ATOM"):
                     continue
                 parts = line.split()
-                if len(parts) >= 2 and not parts[1].startswith("H"):
-                    n += 1
+                if len(parts) < 3:
+                    continue
+                atom_name = parts[1]
+                rosetta_type = parts[2]
+                if atom_name.startswith("H"):
+                    continue
+                if rosetta_type == "VIRT":
+                    continue
+                n += 1
             return n
 
         sub_target = _params_heavy(sub_expected)

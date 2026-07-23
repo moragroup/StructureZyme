@@ -224,3 +224,141 @@ def test_canonical_smiles_raises_on_garbage():
 
     with pytest.raises(LigandParamsError):
         canonical_smiles("not a smiles")
+
+
+# --- < 3 heavy-atom ligands (metal ions) -------------------------------------
+#
+# Real halogenases sometimes carry a single-atom metal cofactor (e.g. [Cu+2]
+# for lytic-polysaccharide-monooxygenase-like enzymes). Rosetta's
+# molfile_to_params.py refuses fragments with fewer than 3 atoms
+# (see vendor/rosetta_tools/molfile_to_params.py line 660). We work around
+# this by padding sub-3-atom ligands with virtual atoms (Rosetta type VIRT,
+# zero energy, zero charge). These tests lock the workaround in place.
+
+
+def _params_atom_types(params_path: Path) -> list[tuple[str, str]]:
+    """Return [(atom_name, rosetta_type), ...] for every ATOM line."""
+    out: list[tuple[str, str]] = []
+    for line in params_path.read_text().splitlines():
+        if not line.startswith("ATOM"):
+            continue
+        parts = line.split()
+        if len(parts) < 3:
+            continue
+        out.append((parts[1], parts[2]))
+    return out
+
+
+def test_generate_params_pads_single_atom_metal_ion(tmp_path):
+    """[Cu+2] has 1 heavy atom; the padded params must have exactly 1 real
+    atom (Cu with rosetta type Cu2p) plus 2 VIRT padding atoms, totalling
+    the 3-atom minimum required by molfile_to_params.py.
+    """
+    from structurezyme.utils.ligand_params import generate_ligand_params
+
+    result = generate_ligand_params(
+        smiles="[Cu+2]", resname="Z01", cache_dir=tmp_path / "cache"
+    )
+    atoms = _params_atom_types(result.params_path)
+    assert len(atoms) == 3, f"expected 3 atoms after padding, got {atoms}"
+
+    real = [(n, t) for n, t in atoms if t != "VIRT"]
+    virt = [(n, t) for n, t in atoms if t == "VIRT"]
+    assert len(real) == 1 and len(virt) == 2, (
+        f"expected 1 real + 2 VIRT, got real={real} virt={virt}"
+    )
+    # Real atom must be copper.
+    assert real[0][1] == "Cu2p", f"expected Cu2p atom type, got {real[0]}"
+
+
+def test_generate_params_preserves_metal_formal_charge(tmp_path):
+    """The full +2 formal charge must stay on Cu, not get diluted onto the
+    padding atoms. Padding uses VIRT type; molfile_to_params.py assigns
+    zero charge to VIRT atoms before distributing any charge offset, so
+    Cu keeps its full formal charge. This is the whole reason we pad with
+    element 'V' (virtual) rather than e.g. hydrogen or helium.
+    """
+    from structurezyme.utils.ligand_params import generate_ligand_params
+
+    result = generate_ligand_params(
+        smiles="[Cu+2]", resname="Z01", cache_dir=tmp_path / "cache"
+    )
+    params_text = result.params_path.read_text()
+    # CHARGE line format: "CHARGE <name> FORMAL <value>"
+    assert "CHARGE CU1  FORMAL 2" in params_text, (
+        f"expected +2 formal charge on CU1; params:\n{params_text}"
+    )
+
+
+def test_generate_params_padded_mol_file_has_marker(tmp_path):
+    """Padding writes a sidecar `.mol.padded` marker with the 0-indexed
+    positions of the injected virtual atoms. The silent-virtualization
+    warning check reads it to avoid mis-flagging deliberate padding.
+    """
+    from structurezyme.utils.ligand_params import generate_ligand_params
+
+    result = generate_ligand_params(
+        smiles="[Cu+2]", resname="Z01", cache_dir=tmp_path / "cache"
+    )
+    mol_path = result.params_path.parent / "Z01.mol"
+    marker_path = mol_path.with_suffix(".mol.padded")
+    assert marker_path.exists(), (
+        f"expected padding marker at {marker_path}, got only "
+        f"{list(mol_path.parent.iterdir())}"
+    )
+    indices = [int(x) for x in marker_path.read_text().split() if x.strip()]
+    # [Cu+2] has 1 heavy atom, pads to 3 total, so 2 padding atoms
+    # at indices 1 and 2 (Cu is atom 0).
+    assert indices == [1, 2], f"expected pad indices [1, 2], got {indices}"
+
+
+def test_padded_params_does_not_warn_about_padding(tmp_path, caplog):
+    """The [Cu+2] warning path must NOT fire for the deliberate padding
+    atoms. Only real elements the tool silently virtualized (e.g. actual
+    vanadium in the SMILES) should trigger the warning.
+    """
+    import logging
+    from structurezyme.utils.ligand_params import generate_ligand_params
+
+    caplog.set_level(logging.WARNING, logger="structurezyme.utils.ligand_params")
+    generate_ligand_params(
+        smiles="[Cu+2]", resname="Z01", cache_dir=tmp_path / "cache"
+    )
+    warnings = [
+        r for r in caplog.records
+        if "VIRT" in r.getMessage() and "geometric anchor" in r.getMessage()
+    ]
+    assert not warnings, (
+        f"expected NO silent-virtualization warning for padded Cu; got: "
+        f"{[r.getMessage() for r in warnings]}"
+    )
+
+
+def test_vanadate_warns_about_silently_virtualized_metal(tmp_path, caplog):
+    """Vanadate (V + 4 O, 5 heavy atoms) does NOT hit the padding path,
+    but molfile_to_params.py silently virtualizes its vanadium atom due
+    to a name-collision with its 'V' virtual-atom convention (comment
+    at vendor line 175 acknowledges this). The four oxygens are typed
+    correctly; only the V center is neutered. Users must be warned.
+    """
+    import logging
+    from structurezyme.utils.ligand_params import generate_ligand_params
+
+    caplog.set_level(logging.WARNING, logger="structurezyme.utils.ligand_params")
+    result = generate_ligand_params(
+        smiles="O=[V]([O-])([O-])[O-]",
+        resname="Z03",
+        cache_dir=tmp_path / "cache",
+    )
+    warnings = [
+        r for r in caplog.records
+        if "VIRT" in r.getMessage() and "geometric anchor" in r.getMessage()
+    ]
+    assert warnings, (
+        f"expected silent-virtualization warning for vanadate; params:\n"
+        f"{result.params_path.read_text()}"
+    )
+    # Sanity: the four oxygens must be typed correctly (OOC, carboxyl-like).
+    atoms = _params_atom_types(result.params_path)
+    ooc_count = sum(1 for _, t in atoms if t == "OOC")
+    assert ooc_count == 4, f"expected 4 OOC oxygens, got atoms={atoms}"
