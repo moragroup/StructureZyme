@@ -11,6 +11,7 @@ from .paths import run_dir, RunLayout
 from .manifest import Manifest, StepRecord
 from .registry import STEPS, StepSpec, ordered_steps
 from .hashing import hash_obj, hash_files
+from .utils.helpers import iter_substrates
 
 REQUIRED_INPUT_COLUMNS: dict[str, list[str]] = {
     "_base": ["Sequence", "substrate_smiles", "Entry"],
@@ -36,6 +37,37 @@ def missing_input_columns(df: pd.DataFrame, enabled: set[str]) -> dict[str, list
         if miss:
             out[g] = miss
     return out
+
+
+def _expand_substrates(df: pd.DataFrame, mode: str) -> pd.DataFrame:
+    """Return the seed frame to persist for the given multi_substrate_mode.
+
+    off/together: frame unchanged plus an ``enzyme_id`` column (== ``Entry``).
+    separate: multi-substrate rows are exploded into one row per substrate with
+    ``Entry`` suffixed ``__s{i}`` and the packed substrate columns unpacked;
+    single-substrate rows keep their ``Entry`` unsuffixed. ``enzyme_id`` always
+    holds the original ``Entry``.
+    """
+    if mode != "separate":
+        out = df.copy()
+        out["enzyme_id"] = out["Entry"]
+        return out
+
+    rows = []
+    for _, row in df.iterrows():
+        subs = iter_substrates(row)
+        multi = len(subs) > 1
+        for i, (smiles, name, moiety) in enumerate(subs):
+            new = row.to_dict()
+            new["enzyme_id"] = row["Entry"]
+            new["Entry"] = f"{row['Entry']}__s{i}" if multi else row["Entry"]
+            new["substrate_smiles"] = smiles
+            if "substrate_name" in new:
+                new["substrate_name"] = name
+            if "substrate_moiety" in new:
+                new["substrate_moiety"] = moiety
+            rows.append(new)
+    return pd.DataFrame(rows, columns=list(df.columns) + ["enzyme_id"])
 
 
 @dataclass
