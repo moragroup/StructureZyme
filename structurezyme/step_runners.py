@@ -329,6 +329,13 @@ def run_boltz(ctx, spec) -> pd.DataFrame:
     return df_boltz
 
 
+def _together_skips_vina(mode: str, df: pd.DataFrame) -> bool:
+    """True when together-mode has any multi-substrate row (Vina can't co-dock)."""
+    if mode != "together":
+        return False
+    return any(len(iter_substrates(row)) > 1 for _, row in df.iterrows())
+
+
 def run_vina(ctx, spec) -> pd.DataFrame:
     """Port of Docking._run_vina (incl. AF2-missing fallback retry)."""
     from structurezyme.steps.dock_vina_step import Vina
@@ -339,12 +346,23 @@ def run_vina(ctx, spec) -> pd.DataFrame:
         log_boxed_note,
     )
 
-    opts = _opts(ctx, "vina")
     out_dir = _docking_dir(ctx)
+    df_boltz = _first_input(ctx, spec)
+
+    if _together_skips_vina(getattr(ctx.config, "multi_substrate_mode", "off"), df_boltz):
+        log_boxed_note(
+            "Skipping vina docking (together-mode co-docking) for all rows; "
+            "using chai/boltz co-folded poses."
+        )
+        df_boltz = df_boltz.copy()
+        df_boltz["vina_dir"] = pd.NA
+        df_boltz.to_pickle(out_dir / "vina.pkl")
+        return df_boltz
+
+    opts = _opts(ctx, "vina")
     num_threads = ctx.config.runtime.num_threads
     metagenomic_enzymes = opts.get("metagenomic_enzymes", 0)
     alt = opts.get("alternative_structure_for_vina", "Boltz")
-    df_boltz = _first_input(ctx, spec)
 
     vina_dir = out_dir / "vina/"
     vina_dir.mkdir(exist_ok=True, parents=True)
