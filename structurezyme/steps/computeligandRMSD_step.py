@@ -29,6 +29,7 @@ from structurezyme.utils.helpers import (
     closest_ligands_by_element_composition,
     norm_l1_dist,
     atom_composition_fingerprint,
+    iter_substrates,
 )
 
 logger = logging.getLogger(__name__)
@@ -89,6 +90,31 @@ def get_tool_from_structure_name(structure_name: str) -> str:
     if '_' in structure_name:
         return structure_name.split('_')[-1]
     return "UNKNOWN_tool" # Fallback if format doesn't match
+
+
+def _match_substrate_chains(ligands, substrate_smiles_list):
+    """Map each substrate SMILES to its best-matching ligand chain.
+
+    Returns a list aligned to ``substrate_smiles_list``; element i is the RDKit
+    Mol from ``ligands`` whose atom composition is closest to
+    ``substrate_smiles_list[i]`` (top_k=1), or None if nothing is left to match.
+    A chain assigned to an earlier substrate is not reused (matched by object
+    identity).
+    """
+    remaining = [m for m in ligands if m is not None]
+    matched = []
+    for smiles in substrate_smiles_list:
+        if not remaining:
+            matched.append(None)
+            continue
+        best = closest_ligands_by_element_composition(remaining, smiles, top_k=1)
+        if not best:
+            matched.append(None)
+            continue
+        chosen = best[0]
+        matched.append(chosen)
+        remaining = [m for m in remaining if m is not chosen]
+    return matched
 
 
 def compute_normalized_ligand_rmsd_stats(rmsd_df: pd.DataFrame):
@@ -320,50 +346,113 @@ class LigandRMSD(Step):
                     mol  = extract_chain_as_rdkit_mol(pdb_file_path, chain_id, sanitize=False)
                     ligands.append(mol)
 
-                filtered_ligands = closest_ligands_by_element_composition(ligands, substrate_smiles)
+                # chain-id-aware ligand list (chain_ids and ligands are aligned)
+                chain_mols = list(zip(chain_ids, ligands))
 
-                if len(filtered_ligands) > 2:
-                    logger.warning('More than 2 ligands were found matching the smile string.')
-                    continue
+                subs = iter_substrates(
+                    df.loc[df[self.entry_col] == sub_dir.name].iloc[0]
+                )
 
-                if len(filtered_ligands) == 0:
-                    logger.warning(f"No valid ligands found for entry {sub_dir.name}. Skipping.")
-                    continue
+                if len(subs) <= 1:
+                    # ---- existing single-substrate path (unchanged) ----
+                    filtered_ligands = closest_ligands_by_element_composition(ligands, substrate_smiles)
 
-                ligand1 = filtered_ligands[0]
-                ligand2 = filtered_ligands[1]
+                    if len(filtered_ligands) > 2:
+                        logger.warning('More than 2 ligands were found matching the smile string.')
+                        continue
 
-                if ligand1 is None or ligand2 is None:
-                    logger.warning(f"Could not extract both ligands, skipping {pdb_file_path}")
-                    continue
+                    if len(filtered_ligands) == 0:
+                        logger.warning(f"No valid ligands found for entry {sub_dir.name}. Skipping.")
+                        continue
 
-                try:
-                    Chem.SanitizeMol(ligand1)
-                    Chem.SanitizeMol(ligand2)
-                    ligand1 = Chem.RemoveHs(ligand1)
-                    ligand2 = Chem.RemoveHs(ligand2)
+                    ligand1 = filtered_ligands[0]
+                    ligand2 = filtered_ligands[1]
 
-                    if ligand1.GetNumConformers() == 0:
-                        AllChem.EmbedMolecule(ligand1)
+                    if ligand1 is None or ligand2 is None:
+                        logger.warning(f"Could not extract both ligands, skipping {pdb_file_path}")
+                        continue
 
-                    if ligand2.GetNumConformers() == 0:
-                        AllChem.EmbedMolecule(ligand2)
+                    try:
+                        Chem.SanitizeMol(ligand1)
+                        Chem.SanitizeMol(ligand2)
+                        ligand1 = Chem.RemoveHs(ligand1)
+                        ligand2 = Chem.RemoveHs(ligand2)
 
-                except Chem.rdchem.AtomValenceException as e:
-                    logger.warning(f"Valence error in {pdb_file_path.name}: {e}")
-                    logger.debug(f"ligand1 SMILES: {Chem.MolToSmiles(ligand1)}")
-                    logger.debug(f"ligand2 SMILES: {Chem.MolToSmiles(ligand2)}")
-                    continue  # skip this ligand pair
-                except Exception as e:
-                    logger.error(f"Unexpected RDKit error in {pdb_file_path.name}: {e}")
-                    continue
+                        if ligand1.GetNumConformers() == 0:
+                            AllChem.EmbedMolecule(ligand1)
 
-                # Calculate ligandRMSD
-                try:
-                    rmsd = rdMolAlign.CalcRMS(ligand1, ligand2, maxMatches=self.maxMatches)
-                except RuntimeError as e:
-                    logger.warning(f"LigandRMSD calculation failed for {pdb_file_path.name}: {e}")
-                    continue 
+                        if ligand2.GetNumConformers() == 0:
+                            AllChem.EmbedMolecule(ligand2)
+
+                    except Chem.rdchem.AtomValenceException as e:
+                        logger.warning(f"Valence error in {pdb_file_path.name}: {e}")
+                        logger.debug(f"ligand1 SMILES: {Chem.MolToSmiles(ligand1)}")
+                        logger.debug(f"ligand2 SMILES: {Chem.MolToSmiles(ligand2)}")
+                        continue  # skip this ligand pair
+                    except Exception as e:
+                        logger.error(f"Unexpected RDKit error in {pdb_file_path.name}: {e}")
+                        continue
+
+                    # Calculate ligandRMSD
+                    try:
+                        rmsd = rdMolAlign.CalcRMS(ligand1, ligand2, maxMatches=self.maxMatches)
+                    except RuntimeError as e:
+                        logger.warning(f"LigandRMSD calculation failed for {pdb_file_path.name}: {e}")
+                        continue
+
+                    extra_rmsd = {}
+                else:
+                    # ---- together-mode per-substrate cross-tool RMSD ----
+                    # Split chains by superimpose convention: tool1 = T,U,... ;
+                    # tool2 = V,W,...  (see superimposestructures_step.py:211-221)
+                    tool1_chains = [m for cid, m in chain_mols if cid in ("T", "U")]
+                    tool2_chains = [m for cid, m in chain_mols if cid in ("V", "W")]
+                    smiles_list = [s[0] for s in subs]
+                    matched1 = _match_substrate_chains(tool1_chains, smiles_list)
+                    matched2 = _match_substrate_chains(tool2_chains, smiles_list)
+
+                    def _prep(m):
+                        if m is None:
+                            return None
+                        try:
+                            Chem.SanitizeMol(m)
+                            m = Chem.RemoveHs(m)
+                            if m.GetNumConformers() == 0:
+                                AllChem.EmbedMolecule(m)
+                            return m
+                        except Exception as e:
+                            logger.warning(f"RDKit prep failed in {pdb_file_path.name}: {e}")
+                            return None
+
+                    extra_rmsd = {}
+                    per_sub_rmsds = []
+                    for i in range(len(subs)):
+                        a, b = _prep(matched1[i]), _prep(matched2[i])
+                        if a is None or b is None:
+                            extra_rmsd[f"ligand_rmsd_s{i}"] = np.nan
+                            continue
+                        try:
+                            r = rdMolAlign.CalcRMS(a, b, maxMatches=self.maxMatches)
+                        except RuntimeError:
+                            r = np.nan
+                        extra_rmsd[f"ligand_rmsd_s{i}"] = r
+                        if not np.isnan(r):
+                            per_sub_rmsds.append(r)
+                    # joint: combine each tool's matched chains and RMSD together
+                    v1 = [m for m in (_prep(x) for x in matched1) if m is not None]
+                    v2 = [m for m in (_prep(x) for x in matched2) if m is not None]
+                    if len(v1) >= 2 and len(v2) >= 2:
+                        try:
+                            j1 = Chem.CombineMols(v1[0], v1[1])
+                            j2 = Chem.CombineMols(v2[0], v2[1])
+                            extra_rmsd["ligand_rmsd_joint"] = rdMolAlign.CalcRMS(
+                                j1, j2, maxMatches=self.maxMatches)
+                        except (RuntimeError, ValueError):
+                            extra_rmsd["ligand_rmsd_joint"] = np.nan
+                    else:
+                        extra_rmsd["ligand_rmsd_joint"] = np.nan
+                    # primary ligand_rmsd = mean of per-substrate RMSDs
+                    rmsd = float(np.mean(per_sub_rmsds)) if per_sub_rmsds else np.nan
 
                 # Store the RMSD value in a dictionary
                 pdb_file_name = pdb_file_path.name
@@ -376,15 +465,17 @@ class LigandRMSD(Step):
                 tool1_name = get_tool_from_structure_name(docked_structure1_name)
                 tool2_name  = get_tool_from_structure_name(docked_structure2_name)
 
-                rmsd_values.append({
-                    'Entry': entry_name, 
-                    'pdb_file': pdb_file_path.name,  # Store the name of the PDB file
-                    'docked_structure1' : docked_structure1_name, 
-                    'docked_structure2' : docked_structure2_name, 
-                    'tool1' : tool1_name, 
+                record = {
+                    'Entry': entry_name,
+                    'pdb_file': pdb_file_path.name,
+                    'docked_structure1': docked_structure1_name,
+                    'docked_structure2': docked_structure2_name,
+                    'tool1': tool1_name,
                     'tool2': tool2_name,
-                    'ligand_rmsd': rmsd   # Store the calculated RMSD value
-                })
+                    'ligand_rmsd': rmsd,
+                }
+                record.update(extra_rmsd)
+                rmsd_values.append(record)
 
         # Pairwise ligandRMSD table
         rmsd_df = pd.DataFrame(rmsd_values)

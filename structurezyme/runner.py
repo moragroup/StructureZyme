@@ -11,6 +11,7 @@ from .paths import run_dir, RunLayout
 from .manifest import Manifest, StepRecord
 from .registry import STEPS, StepSpec, ordered_steps
 from .hashing import hash_obj, hash_files
+from .utils.helpers import iter_substrates
 
 REQUIRED_INPUT_COLUMNS: dict[str, list[str]] = {
     "_base": ["Sequence", "substrate_smiles", "Entry"],
@@ -36,6 +37,64 @@ def missing_input_columns(df: pd.DataFrame, enabled: set[str]) -> dict[str, list
         if miss:
             out[g] = miss
     return out
+
+
+def _validate_multi_substrate_row(row) -> None:
+    """Raise a ValueError (naming Entry) if a row's packed substrate columns
+    are malformed: an empty SMILES fragment, or a present non-empty
+    name/moiety parallel list whose length != the substrate count."""
+    entry = row["Entry"]
+    raw = str(row["substrate_smiles"])
+    frags = raw.split(".")
+    if any(f.strip() == "" for f in frags):
+        raise ValueError(
+            f"Malformed substrate_smiles for Entry={entry!r}: empty fragment "
+            f"in {raw!r}"
+        )
+    n = len(frags)
+    for col in ("substrate_name", "substrate_moiety"):
+        if col in row and row[col] is not None and str(row[col]).strip() != "":
+            parts = str(row[col]).split("|")
+            if len(parts) != n:
+                raise ValueError(
+                    f"Malformed {col} for Entry={entry!r}: {len(parts)} "
+                    f"value(s) for {n} substrate(s)"
+                )
+
+
+def _expand_substrates(df: pd.DataFrame, mode: str) -> pd.DataFrame:
+    """Return the seed frame to persist for the given multi_substrate_mode.
+
+    off/together: frame unchanged plus an ``enzyme_id`` column (== ``Entry``).
+    separate: multi-substrate rows are exploded into one row per substrate with
+    ``Entry`` suffixed ``__s{i}`` and the packed substrate columns unpacked;
+    single-substrate rows keep their ``Entry`` unsuffixed. ``enzyme_id`` always
+    holds the original ``Entry``.
+    """
+    if mode != "off":
+        for _, row in df.iterrows():
+            _validate_multi_substrate_row(row)
+
+    if mode != "separate":
+        out = df.copy()
+        out["enzyme_id"] = out["Entry"]
+        return out
+
+    rows = []
+    for _, row in df.iterrows():
+        subs = iter_substrates(row)
+        multi = len(subs) > 1
+        for i, (smiles, name, moiety) in enumerate(subs):
+            new = row.to_dict()
+            new["enzyme_id"] = row["Entry"]
+            new["Entry"] = f"{row['Entry']}__s{i}" if multi else row["Entry"]
+            new["substrate_smiles"] = smiles
+            if "substrate_name" in new:
+                new["substrate_name"] = name
+            if "substrate_moiety" in new:
+                new["substrate_moiety"] = moiety
+            rows.append(new)
+    return pd.DataFrame(rows, columns=list(df.columns) + ["enzyme_id"])
 
 
 @dataclass
@@ -117,6 +176,7 @@ class Runner:
             df = pd.read_pickle(seed)
         else:
             df = _load_input_frame(self.config.paths.input_csv)
+            df = _expand_substrates(df, self.config.multi_substrate_mode)
             df.to_pickle(seed)
         enabled = {n for n in STEPS if self.config.is_enabled(n)}
         miss = missing_input_columns(df, enabled)

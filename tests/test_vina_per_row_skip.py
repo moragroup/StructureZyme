@@ -23,6 +23,9 @@ class _FakeRuntime:
 
 
 class _FakeConfig:
+    # mirrors RunConfig: multi_substrate_mode always exists (default "off")
+    multi_substrate_mode = "off"
+
     def __init__(self, opts):
         self._opts = opts
         self.runtime = _FakeRuntime()

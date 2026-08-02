@@ -13,6 +13,8 @@ from biotite.structure import AtomArrayStack
 from structurezyme.steps.step import Step
 from structurezyme.utils.helpers import SingleLigandSelect
 from structurezyme.utils.helpers import get_hetatm_chain_ids, extract_chain_as_rdkit_mol, closest_ligands_by_element_composition
+from structurezyme.utils.helpers import iter_substrates
+from structurezyme.steps.geometric_filtering_cofactor_MCS import _suffix_keys
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -113,50 +115,65 @@ class LigandSASA(Step):
                     f"Prepared PDB not found for {best_structure_name}: {pdb_file}"
                 )
 
-            try:
-                ligand = select_ligand_from_smiles_via_composition(pdb_file, substrate_smiles)
-                if not ligand:
-                    raise RuntimeError("No ligand chains found or composition match failed.")
-                chain_id, resseq, resname = ligand
-                #print(ligand)
+            def _analyze(sub_smiles):
+                # Per-substrate failures are isolated INSIDE the closure (as in
+                # geometric_filtering_cofactor_MCS) so that one bad substrate
+                # yields its own suffixed None-block rather than letting the
+                # outer handler write UNSUFFIXED keys that would mix with the
+                # good substrate's `_s{i}` columns.
+                r = dict(default_result)
+                try:
+                    ligand = select_ligand_from_smiles_via_composition(
+                        pdb_file, sub_smiles)
+                    if not ligand:
+                        return r
+                    chain_id, resseq, resname = ligand
 
-                # Extract ligand from PDB file containing docked protein-ligand structure and save in temporary directory
-                with TemporaryDirectory() as tmpdir:
-                    ligand_path = Path(tmpdir) / "ligand.pdb"
+                    # Extract ligand from PDB file containing docked protein-ligand structure and save in temporary directory
+                    with TemporaryDirectory() as tmpdir:
+                        ligand_path = Path(tmpdir) / "ligand.pdb"
 
-                    io = PDBIO()
-                    structure = PDBParser(QUIET=True).get_structure("s", str(pdb_file))[0]
-                    io.set_structure(structure)
-                    io.save(str(ligand_path), select=SingleLigandSelect(chain_id, resseq, resname))
+                        io = PDBIO()
+                        structure = PDBParser(QUIET=True).get_structure("s", str(pdb_file))[0]
+                        io.set_structure(structure)
+                        io.save(str(ligand_path), select=SingleLigandSelect(chain_id, resseq, resname))
 
-                    # load complex & ligand into FreeSASA
-                    structure_complex = freesasa.Structure(str(pdb_file), options={'hetatm': True})
-                    structure_ligand = freesasa.Structure(str(ligand_path), options={'hetatm': True})
+                        # load complex & ligand into FreeSASA
+                        structure_complex = freesasa.Structure(str(pdb_file), options={'hetatm': True})
+                        structure_ligand = freesasa.Structure(str(ligand_path), options={'hetatm': True})
 
-                # Run SASA calculation
-                result_ligand = freesasa.calc(structure_ligand)
-                result_complex = freesasa.calc(structure_complex)
+                    # Run SASA calculation
+                    result_ligand = freesasa.calc(structure_ligand)
+                    result_complex = freesasa.calc(structure_complex)
 
-                # Get SASA values
-                selection = [f"ligand, chain {chain_id} and resn {resname} and resi {resseq}"]
-                sasa_ligand_in_complex = freesasa.selectArea(selection, structure_complex, result_complex)
-                sasa_ligand_alone = result_ligand.totalArea()
+                    # Get SASA values
+                    selection = [f"ligand, chain {chain_id} and resn {resname} and resi {resseq}"]
+                    sasa_ligand_in_complex = freesasa.selectArea(selection, structure_complex, result_complex)
+                    sasa_ligand_alone = result_ligand.totalArea()
 
-                # Buried SASA = exposed alone - exposed in complex
-                buried_sasa = sasa_ligand_alone - sasa_ligand_in_complex["ligand"]
-                if sasa_ligand_alone > 0:
-                    percent_buried = (buried_sasa / sasa_ligand_alone) * 100
-                else:
-                    percent_buried = 0.0
+                    # Buried SASA = exposed alone - exposed in complex
+                    buried_sasa = sasa_ligand_alone - sasa_ligand_in_complex["ligand"]
+                    if sasa_ligand_alone > 0:
+                        percent_buried = (buried_sasa / sasa_ligand_alone) * 100
+                    else:
+                        percent_buried = 0.0
 
-                row_result['sasa_ligand_in_complex'] = sasa_ligand_in_complex["ligand"]
-                row_result['sasa_ligand_alone'] = sasa_ligand_alone
-                row_result['buried_sasa'] = buried_sasa
-                row_result['percentage_buried_sasa'] = percent_buried
+                    r['sasa_ligand_in_complex'] = sasa_ligand_in_complex["ligand"]
+                    r['sasa_ligand_alone'] = sasa_ligand_alone
+                    r['buried_sasa'] = buried_sasa
+                    r['percentage_buried_sasa'] = percent_buried
+                except Exception as e:
+                    logger.error(f"Error processing {entry_name} substrate "
+                                 f"{sub_smiles!r}: {e}")
+                    return dict(default_result)
+                return r
 
-            except Exception as e:
-                logger.error(f"Error processing {entry_name}: {e}")
-                row_result.update(default_result)
+            subs = iter_substrates(row)
+            if len(subs) <= 1:
+                row_result.update(_analyze(substrate_smiles))
+            else:
+                for i, (s_smiles, _n, _m) in enumerate(subs):
+                    row_result.update(_suffix_keys(_analyze(s_smiles), i))
 
             results.append(row_result)
         return results

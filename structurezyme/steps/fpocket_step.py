@@ -9,12 +9,15 @@ import subprocess
 import shutil
 import uuid
 import re
+import hashlib
 from collections import Counter
 from biotite.structure.io.pdb import PDBFile
 from biotite.structure import AtomArrayStack
 
 from structurezyme.steps.step import Step
 from structurezyme.utils.helpers import get_hetatm_chain_ids, extract_chain_as_rdkit_mol, closest_ligands_by_element_composition
+from structurezyme.utils.helpers import iter_substrates
+from structurezyme.steps.geometric_filtering_cofactor_MCS import _suffix_keys
 
 
 # How to run fpocket in terminal: fpocket -f /home/helen/cec_degrader/generalize/alphafold_structures/A1RRK1_structure.pdb
@@ -235,11 +238,12 @@ class Fpocket(Step):
         self.preparedfiles_dir = Path(preparedfiles_dir)
         self.num_threads = num_threads
 
-    # This function processes a SINGLE row and returns its result (a pd.Series)
-    def _process_single_row_with_fpocket(self, row: pd.Series) -> pd.Series:
+    # This function processes a SINGLE row for ONE substrate and returns its
+    # result (a pd.Series). Called once per substrate in `together` mode.
+    def _fpocket_one_substrate(self, row: pd.Series, sub_smiles, tag=None) -> pd.Series:
         best_structure_name = row['docked_structure']
         pdb_file_path = self.preparedfiles_dir / f"{best_structure_name}.pdb"
-        substrate_smiles = row.get("substrate_smiles")
+        substrate_smiles = sub_smiles
         
         row_results = {"ASvolume_dir": None}
 
@@ -292,7 +296,12 @@ class Fpocket(Step):
                 logger.warning(f"fpocket output directory not found in temp dir after successful run for {pdb_file_path.stem}: {expected_out_dir_in_temp}")
                 return pd.Series(row_results, index=row_results.keys())
             
-            final_out_dir = self.output_dir / f"{pdb_file_path.stem}_fpocket_output"
+            # Single-substrate/off mode (tag is None) keeps the legacy directory
+            # name so the surfaced `ASvolume_dir` column value is byte-for-byte
+            # unchanged. In `together` mode each substrate gets a distinct tag so
+            # per-substrate output dirs do not collide.
+            stem = pdb_file_path.stem if tag is None else f"{pdb_file_path.stem}_{tag}"
+            final_out_dir = self.output_dir / f"{stem}_fpocket_output"
             
             if final_out_dir.exists():
                 logger.warning(f"Existing fpocket output for {pdb_file_path.stem} found at {final_out_dir}. Removing old fpocket output.")
@@ -333,6 +342,22 @@ class Fpocket(Step):
         # Return the Series with fpocket_dir and all extracted features for this row
         return pd.Series(row_results, index=row_results.keys())
 
+    # This function processes a SINGLE row and returns its result (a pd.Series).
+    # In `together` mode it dispatches to `_fpocket_one_substrate` once per
+    # substrate and suffixes each substrate's keys `_s{i}`, merging them into
+    # one Series (no hard-filtering on any single substrate). Single-substrate
+    # rows keep calling the worker exactly as before, with unsuffixed keys.
+    def _process_single_row_with_fpocket(self, row: pd.Series) -> pd.Series:
+        subs = iter_substrates(row)
+        if len(subs) <= 1:
+            return self._fpocket_one_substrate(
+                row, subs[0][0] if subs else row.get("substrate_smiles"))
+        merged = {}
+        for i, (s_smiles, _n, _m) in enumerate(subs):
+            sub_tag = hashlib.md5(str(s_smiles).encode()).hexdigest()[:6]
+            s = self._fpocket_one_substrate(row, s_smiles, tag=sub_tag)
+            merged.update(_suffix_keys(dict(s), i))
+        return pd.Series(merged)
 
     def __execute(self, df: pd.DataFrame) -> pd.DataFrame:
 
