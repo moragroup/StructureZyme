@@ -176,6 +176,7 @@ class Runner:
             df = pd.read_pickle(seed)
         else:
             df = _load_input_frame(self.config.paths.input_csv)
+            df = _expand_substrates(df, self.config.multi_substrate_mode)
             df.to_pickle(seed)
         enabled = {n for n in STEPS if self.config.is_enabled(n)}
         miss = missing_input_columns(df, enabled)

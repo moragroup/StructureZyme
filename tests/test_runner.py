@@ -162,3 +162,44 @@ def test_all_optional_steps_disabled_degrade_gracefully(tmp_path, monkeypatch):
     assert seen["docking_metrics"] == ["boltz"], "vina absent -> only boltz frame"
     assert "superimpose" in calls
     assert seen["superimpose"] == ["prepare_files"], "fastrelax absent -> only prepare_files"
+
+
+def _cfg_multi(tmp_path, mode):
+    csv = tmp_path / "input.csv"
+    pd.DataFrame({"Sequence": ["M"], "substrate_smiles": ["CCO.O"],
+                  "Entry": ["P1"], "vina_residues": ["1|2"],
+                  "substrate_moiety": ["CO|O"],
+                  "substrate_name": ["ethanol|water"]}).to_csv(csv, index=False)
+    return RunConfig(
+        paths={"output_root": str(tmp_path),
+               "boltz_cache_dir": str(tmp_path / "cache"),
+               "input_csv": str(csv)},
+        runtime={"user": "tester", "run_id": "r1"},
+        multi_substrate_mode=mode,
+    )
+
+
+def test_seed_separate_mode_expands_pickle(tmp_path, monkeypatch):
+    for spec in registry.STEPS.values():
+        monkeypatch.setattr(spec, "runner",
+                            lambda ctx, spec: pd.DataFrame({"Entry": [spec.name]}),
+                            raising=False)
+    r = Runner(_cfg_multi(tmp_path, "separate"))
+    r._seed_and_validate()
+    seed = pd.read_pickle(r.layout.checkpoint_path("_input"))
+    assert list(seed["Entry"]) == ["P1__s0", "P1__s1"]
+    assert list(seed["enzyme_id"]) == ["P1", "P1"]
+    assert list(seed["substrate_smiles"]) == ["CCO", "O"]
+
+
+def test_seed_off_mode_adds_enzyme_id_only(tmp_path, monkeypatch):
+    for spec in registry.STEPS.values():
+        monkeypatch.setattr(spec, "runner",
+                            lambda ctx, spec: pd.DataFrame({"Entry": [spec.name]}),
+                            raising=False)
+    r = Runner(_cfg_multi(tmp_path, "off"))
+    r._seed_and_validate()
+    seed = pd.read_pickle(r.layout.checkpoint_path("_input"))
+    assert list(seed["Entry"]) == ["P1"]
+    assert list(seed["enzyme_id"]) == ["P1"]
+    assert list(seed["substrate_smiles"]) == ["CCO.O"]
