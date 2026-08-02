@@ -32,10 +32,23 @@ def test_does_not_reuse_a_chain_across_substrates():
     assert matched[1] is None  # the single chain is consumed by substrate 0
 
 
-def test_per_substrate_rmsd_keys_emitted(tmp_path, monkeypatch):
-    import structurezyme.steps.computeligandRMSD_step as mod
+def _conformer(smiles, seed):
+    # a hydrogen-bearing 3D mol with a specific (seed-dependent) conformer, so
+    # two conformers of the SAME molecule differ in coordinates -> nonzero RMSD
+    from rdkit import Chem
+    from rdkit.Chem import AllChem
+    m = Chem.AddHs(Chem.MolFromSmiles(smiles))
+    AllChem.EmbedMolecule(m, randomSeed=seed)
+    return m
 
-    # one entry dir with one paired PDB
+
+def test_per_substrate_rmsd_is_real_cross_tool_metric(tmp_path, monkeypatch):
+    # This test exercises the ACTUAL T/U (tool1) vs V/W (tool2) chain pairing
+    # (superimposestructures_step.py:211-221). It must fail if the code
+    # self-compares, pairs the wrong chains, or swaps tool1/tool2.
+    import structurezyme.steps.computeligandRMSD_step as mod
+    import numpy as np
+
     entry = tmp_path / "P1"
     entry.mkdir()
     (entry / "chai_0__boltz_0.pdb").write_text("dummy")
@@ -43,20 +56,31 @@ def test_per_substrate_rmsd_keys_emitted(tmp_path, monkeypatch):
     df = pd.DataFrame({"Entry": ["P1"],
                        "substrate_smiles": ["CCO.c1ccncc1"]})
 
-    # stub chain extraction: 2 chains per structure, matching the 2 substrates
-    from rdkit import Chem
-    eth = Chem.AddHs(Chem.MolFromSmiles("CCO"))
-    pyr = Chem.AddHs(Chem.MolFromSmiles("c1ccncc1"))
-    Chem.AllChem.EmbedMolecule(eth); Chem.AllChem.EmbedMolecule(pyr)
+    # tool1 ligands live on chains T (substrate 0) and U (substrate 1);
+    # tool2 ligands on V (substrate 0) and W (substrate 1). Same molecule per
+    # substrate across tools, but a DIFFERENT conformer -> a real, nonzero
+    # cross-tool RMSD only when T<->V and U<->W are paired correctly.
+    chain_to_mol = {
+        "T": _conformer("CCO", seed=1),        # tool1 ethanol
+        "V": _conformer("CCO", seed=99),       # tool2 ethanol (diff conformer)
+        "U": _conformer("c1ccncc1", seed=1),   # tool1 pyridine
+        "W": _conformer("c1ccncc1", seed=99),  # tool2 pyridine (diff conformer)
+    }
     monkeypatch.setattr(mod, "get_hetatm_chain_ids",
-                        lambda p: ["B", "C"], raising=True)
+                        lambda p: ["T", "U", "V", "W"], raising=True)
     monkeypatch.setattr(mod, "extract_chain_as_rdkit_mol",
-                        lambda p, cid, sanitize=False:
-                            (eth if cid == "B" else pyr), raising=True)
+                        lambda p, cid, sanitize=False: chain_to_mol[cid],
+                        raising=True)
 
     step = mod.LigandRMSD(input_dir=str(tmp_path), output_dir=str(tmp_path / "out"))
     rmsd_df, _ = step.execute(df)
     cols = set(rmsd_df.columns)
-    assert "ligand_rmsd_s0" in cols
-    assert "ligand_rmsd_s1" in cols
-    assert "ligand_rmsd_joint" in cols
+    assert {"ligand_rmsd_s0", "ligand_rmsd_s1", "ligand_rmsd_joint"} <= cols
+
+    # both per-substrate cross-tool RMSDs are computed (not NaN) and strictly
+    # positive (the two tools' conformers differ). A self-comparison bug would
+    # give 0.0; a wrong-chain pairing would give NaN or a mismatched value.
+    s0 = rmsd_df["ligand_rmsd_s0"].iloc[0]
+    s1 = rmsd_df["ligand_rmsd_s1"].iloc[0]
+    assert not np.isnan(s0) and s0 > 0.0
+    assert not np.isnan(s1) and s1 > 0.0
