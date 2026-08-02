@@ -29,6 +29,7 @@ from structurezyme.utils.helpers import (
     closest_ligands_by_element_composition,
     norm_l1_dist,
     atom_composition_fingerprint,
+    iter_substrates,
 )
 
 logger = logging.getLogger(__name__)
@@ -89,6 +90,31 @@ def get_tool_from_structure_name(structure_name: str) -> str:
     if '_' in structure_name:
         return structure_name.split('_')[-1]
     return "UNKNOWN_tool" # Fallback if format doesn't match
+
+
+def _match_substrate_chains(ligands, substrate_smiles_list):
+    """Map each substrate SMILES to its best-matching ligand chain.
+
+    Returns a list aligned to ``substrate_smiles_list``; element i is the RDKit
+    Mol from ``ligands`` whose atom composition is closest to
+    ``substrate_smiles_list[i]`` (top_k=1), or None if nothing is left to match.
+    A chain assigned to an earlier substrate is not reused (matched by object
+    identity).
+    """
+    remaining = [m for m in ligands if m is not None]
+    matched = []
+    for smiles in substrate_smiles_list:
+        if not remaining:
+            matched.append(None)
+            continue
+        best = closest_ligands_by_element_composition(remaining, smiles, top_k=1)
+        if not best:
+            matched.append(None)
+            continue
+        chosen = best[0]
+        matched.append(chosen)
+        remaining = [m for m in remaining if m is not chosen]
+    return matched
 
 
 def compute_normalized_ligand_rmsd_stats(rmsd_df: pd.DataFrame):
