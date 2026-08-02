@@ -1,5 +1,6 @@
 # tests/test_expand_substrates.py
 import pandas as pd
+import pytest
 from structurezyme.runner import _expand_substrates
 
 
@@ -45,3 +46,26 @@ def test_separate_mode_single_substrate_not_suffixed():
     df = _expand_substrates(one, "separate")
     assert list(df["Entry"]) == ["P9"]
     assert list(df["enzyme_id"]) == ["P9"]
+
+
+def test_separate_length_mismatch_raises():
+    df = pd.DataFrame({"Entry": ["P1"], "Sequence": ["M"],
+                       "substrate_smiles": ["CCO.O"],
+                       "substrate_name": ["only_one"],  # 1 name for 2 smiles
+                       "substrate_moiety": ["CO|O"]})
+    with pytest.raises(ValueError, match="P1"):
+        _expand_substrates(df, "separate")
+
+
+def test_empty_fragment_raises():
+    df = pd.DataFrame({"Entry": ["P2"], "Sequence": ["M"],
+                       "substrate_smiles": ["CCO..O"]})  # empty middle fragment
+    with pytest.raises(ValueError, match="P2"):
+        _expand_substrates(df, "together")
+
+
+def test_off_mode_does_not_validate():
+    # off mode must never raise even on ragged parallel lists
+    df = pd.DataFrame({"Entry": ["P3"], "substrate_smiles": ["CCO.O"],
+                       "substrate_name": ["only_one"]})
+    _expand_substrates(df, "off")  # no exception

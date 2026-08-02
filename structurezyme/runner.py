@@ -39,6 +39,29 @@ def missing_input_columns(df: pd.DataFrame, enabled: set[str]) -> dict[str, list
     return out
 
 
+def _validate_multi_substrate_row(row) -> None:
+    """Raise a ValueError (naming Entry) if a row's packed substrate columns
+    are malformed: an empty SMILES fragment, or a present non-empty
+    name/moiety parallel list whose length != the substrate count."""
+    entry = row["Entry"]
+    raw = str(row["substrate_smiles"])
+    frags = raw.split(".")
+    if any(f.strip() == "" for f in frags):
+        raise ValueError(
+            f"Malformed substrate_smiles for Entry={entry!r}: empty fragment "
+            f"in {raw!r}"
+        )
+    n = len(frags)
+    for col in ("substrate_name", "substrate_moiety"):
+        if col in row and row[col] is not None and str(row[col]).strip() != "":
+            parts = str(row[col]).split("|")
+            if len(parts) != n:
+                raise ValueError(
+                    f"Malformed {col} for Entry={entry!r}: {len(parts)} "
+                    f"value(s) for {n} substrate(s)"
+                )
+
+
 def _expand_substrates(df: pd.DataFrame, mode: str) -> pd.DataFrame:
     """Return the seed frame to persist for the given multi_substrate_mode.
 
@@ -48,6 +71,10 @@ def _expand_substrates(df: pd.DataFrame, mode: str) -> pd.DataFrame:
     single-substrate rows keep their ``Entry`` unsuffixed. ``enzyme_id`` always
     holds the original ``Entry``.
     """
+    if mode != "off":
+        for _, row in df.iterrows():
+            _validate_multi_substrate_row(row)
+
     if mode != "separate":
         out = df.copy()
         out["enzyme_id"] = out["Entry"]
