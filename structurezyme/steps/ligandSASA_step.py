@@ -13,6 +13,8 @@ from biotite.structure import AtomArrayStack
 from structurezyme.steps.step import Step
 from structurezyme.utils.helpers import SingleLigandSelect
 from structurezyme.utils.helpers import get_hetatm_chain_ids, extract_chain_as_rdkit_mol, closest_ligands_by_element_composition
+from structurezyme.utils.helpers import iter_substrates
+from structurezyme.steps.geometric_filtering_cofactor_MCS import _suffix_keys
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -113,12 +115,13 @@ class LigandSASA(Step):
                     f"Prepared PDB not found for {best_structure_name}: {pdb_file}"
                 )
 
-            try:
-                ligand = select_ligand_from_smiles_via_composition(pdb_file, substrate_smiles)
+            def _analyze(sub_smiles):
+                r = dict(default_result)
+                ligand = select_ligand_from_smiles_via_composition(
+                    pdb_file, sub_smiles)
                 if not ligand:
-                    raise RuntimeError("No ligand chains found or composition match failed.")
+                    return r
                 chain_id, resseq, resname = ligand
-                #print(ligand)
 
                 # Extract ligand from PDB file containing docked protein-ligand structure and save in temporary directory
                 with TemporaryDirectory() as tmpdir:
@@ -149,11 +152,19 @@ class LigandSASA(Step):
                 else:
                     percent_buried = 0.0
 
-                row_result['sasa_ligand_in_complex'] = sasa_ligand_in_complex["ligand"]
-                row_result['sasa_ligand_alone'] = sasa_ligand_alone
-                row_result['buried_sasa'] = buried_sasa
-                row_result['percentage_buried_sasa'] = percent_buried
+                r['sasa_ligand_in_complex'] = sasa_ligand_in_complex["ligand"]
+                r['sasa_ligand_alone'] = sasa_ligand_alone
+                r['buried_sasa'] = buried_sasa
+                r['percentage_buried_sasa'] = percent_buried
+                return r
 
+            try:
+                subs = iter_substrates(row)
+                if len(subs) <= 1:
+                    row_result.update(_analyze(substrate_smiles))
+                else:
+                    for i, (s_smiles, _n, _m) in enumerate(subs):
+                        row_result.update(_suffix_keys(_analyze(s_smiles), i))
             except Exception as e:
                 logger.error(f"Error processing {entry_name}: {e}")
                 row_result.update(default_result)
