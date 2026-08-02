@@ -11,6 +11,8 @@ from biotite.structure import AtomArrayStack
 from structurezyme.steps.step import Step
 from structurezyme.utils.helpers import SingleLigandSelect, suppress_stdout_stderr
 from structurezyme.utils.helpers import get_hetatm_chain_ids, extract_chain_as_rdkit_mol, closest_ligands_by_element_composition
+from structurezyme.utils.helpers import iter_substrates
+from structurezyme.steps.geometric_filtering_cofactor_MCS import _suffix_keys
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -122,42 +124,41 @@ class PLIP(Step):
                     'plip_metal_complexes': None,
                 }
 
-                # load and analyze the docked structure
+                # load and analyze the docked structure (once per PDB)
                 with suppress_stdout_stderr():
                     prot = PDBComplex()
                     prot.load_pdb(pdb_file_as_str)
                     prot.analyze()
 
-                # select ligand closest in atom composition to substrate_smiles
-                ligand = select_ligand_from_smiles_via_composition(pdb_file_as_path, substrate_smiles)
-                if not ligand:
-                    raise RuntimeError("No ligand chains found or composition match failed.")
-                chain_id, resseq, resname = ligand
+                def _analyze(sub_smiles):
+                    r = dict(default_result)
+                    ligand = select_ligand_from_smiles_via_composition(
+                        pdb_file_as_path, sub_smiles)
+                    if not ligand:
+                        return r
+                    chain_id, resseq, resname = ligand
+                    formatted_ligand_id = f"{resname}:{chain_id}:{resseq}"
+                    interactions = prot.interaction_sets[formatted_ligand_id]
+                    r['plip_hydrogen_nbonds'] = (
+                        len(interactions.hbonds_ldon) + len(interactions.hbonds_pdon))
+                    r['plip_hydrophobic_contacts'] = len(interactions.hydrophobic_contacts)
+                    r['plip_salt_bridges'] = (
+                        len(interactions.saltbridge_pneg) + len(interactions.saltbridge_lneg))
+                    r['plip_pi_stacking'] = len(interactions.pistacking)
+                    r['plip_pi_cation'] = (
+                        len(interactions.pication_laro) + len(interactions.pication_paro))
+                    r['plip_halogen_bonds'] = len(interactions.halogen_bonds)
+                    r['plip_water_bridges'] = len(interactions.water_bridges)
+                    r['plip_metal_complexes'] = len(interactions.metal_complexes)
+                    return r
 
-                # define ligand interactions for PLIP
-                formatted_ligand_id = f"{resname}:{chain_id}:{resseq}" 
-                interactions = prot.interaction_sets[formatted_ligand_id]
+                subs = iter_substrates(row)
+                if len(subs) <= 1:
+                    row_result.update(_analyze(substrate_smiles))
+                else:
+                    for i, (s_smiles, _n, _m) in enumerate(subs):
+                        row_result.update(_suffix_keys(_analyze(s_smiles), i))
 
-                # Count interactions
-                num_hbonds = len(interactions.hbonds_ldon) + len(interactions.hbonds_pdon)
-                num_hydrophobics = len(interactions.hydrophobic_contacts)
-                num_saltbridges = len(interactions.saltbridge_pneg) + len(interactions.saltbridge_lneg)
-                num_pistacking = len(interactions.pistacking)
-                num_pication = len(interactions.pication_laro) + len(interactions.pication_paro)
-                num_halogen = len(interactions.halogen_bonds)
-                num_waterbridges = len(interactions.water_bridges)
-                num_metal = len(interactions.metal_complexes) 
-
-                # Update row_result with interaction counts
-                row_result['plip_hydrogen_nbonds'] = num_hbonds
-                row_result['plip_hydrophobic_contacts'] = num_hydrophobics
-                row_result['plip_salt_bridges'] = num_saltbridges
-                row_result['plip_pi_stacking'] = num_pistacking
-                row_result['plip_pi_cation'] = num_pication
-                row_result['plip_halogen_bonds'] = num_halogen
-                row_result['plip_water_bridges'] = num_waterbridges
-                row_result['plip_metal_complexes'] = num_metal  
-                
             except Exception as e:
                 logger.error(f"Error processing {entry_name}: {e}")
                 row_result.update(default_result)
