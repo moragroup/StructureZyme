@@ -1423,34 +1423,445 @@ git add structurezyme/steps/geometric_filtering_cofactor_MCS.py tests/test_geome
 git -c core.fsync=none commit -m "feat: per-substrate geometric filter columns in together mode"
 ```
 
-### Tasks 9b-9d: plip, ligand_sasa, fpocket per-substrate columns
+### Task 9b: PLIP per-substrate `_s{i}` columns
 
-Each of these three steps follows the SAME pattern as Task 9: they extract
-ligand chains, match the single `substrate_smiles` via
-`closest_ligands_by_element_composition(..., top_k=1)`, and compute per-ligand
-metrics. Apply the identical treatment: import `iter_substrates` and
-`_suffix_keys` (import `_suffix_keys` from
-`structurezyme.steps.geometric_filtering_cofactor_MCS`), wrap the per-substrate
-analysis in a local `_analyze(sub_smiles, ...)` closure, and in `together` mode
-loop `for i, (s_smiles, s_name, s_moiety) in enumerate(iter_substrates(row))`
-merging `_suffix_keys(_analyze(...), i)`. Single-substrate rows keep unsuffixed
-keys. Do NOT hard-filter any substrate.
+`plip_step.py` analyzes ONE ligand per row: it picks the chain closest to
+`substrate_smiles` via `select_ligand_from_smiles_via_composition`
+(plip_step.py:20-76) and records 8 `plip_*` interaction counts. In `together`
+mode, loop over substrates and emit each substrate's counts suffixed `_s{i}`.
+The expensive `prot.analyze()` runs ONCE per PDB; only ligand selection +
+interaction lookup repeat per substrate.
 
-- [ ] **Task 9b — plip:** `structurezyme/steps/` PLIP step (interaction
-  fingerprint per ligand). Test: `tests/test_plip_multi_substrate.py` asserting
-  the together-mode result dict contains the plip metric keys suffixed `_s0`
-  and `_s1`. Commit: `feat: per-substrate plip columns in together mode`.
-- [ ] **Task 9c — ligand_sasa:** ligand SASA step. Test:
-  `tests/test_ligand_sasa_multi_substrate.py` asserting SASA keys suffixed
-  `_s0`/`_s1`. Commit: `feat: per-substrate ligand SASA columns in together mode`.
-- [ ] **Task 9d — fpocket:** `structurezyme/steps/fpocket_step.py`
-  (uses `fpocket_r_from_smiles_via_composition(pdb_path, substrate_smiles)`,
-  line 171). Loop substrates, suffix pocket-feature keys `_s{i}`. Test:
-  `tests/test_fpocket_multi_substrate.py`. Commit:
-  `feat: per-substrate fpocket columns in together mode`.
+**Files:**
+- Modify: `structurezyme/steps/plip_step.py:94-165` (`__execute` per-row body)
+- Test: `tests/test_plip_multi_substrate.py` (create)
 
-Each sub-task ends with `pytest -p no:cacheprovider` green (+2 tests each →
-228, 230, 232 passed) and its own commit.
+**Interfaces:**
+- Consumes: `iter_substrates` (Task 2); `_suffix_keys` (Task 9, imported from
+  `structurezyme.steps.geometric_filtering_cofactor_MCS`);
+  `select_ligand_from_smiles_via_composition` (same module).
+- Produces (together mode): keys `plip_hydrogen_nbonds_s{i}`,
+  `plip_hydrophobic_contacts_s{i}`, `plip_salt_bridges_s{i}`,
+  `plip_pi_stacking_s{i}`, `plip_pi_cation_s{i}`, `plip_halogen_bonds_s{i}`,
+  `plip_water_bridges_s{i}`, `plip_metal_complexes_s{i}`. Single-substrate:
+  unsuffixed (unchanged).
+
+- [ ] **Step 1: Write the failing test**
+
+Create `tests/test_plip_multi_substrate.py`:
+
+```python
+# tests/test_plip_multi_substrate.py
+import pandas as pd
+import structurezyme.steps.plip_step as plip_mod
+from structurezyme.steps.plip_step import PLIP
+
+
+class _FakeInteractions:
+    hbonds_ldon = []; hbonds_pdon = []
+    hydrophobic_contacts = []; saltbridge_pneg = []; saltbridge_lneg = []
+    pistacking = []; pication_laro = []; pication_paro = []
+    halogen_bonds = []; water_bridges = []; metal_complexes = []
+
+
+def test_plip_together_emits_per_substrate_keys(tmp_path, monkeypatch):
+    (tmp_path / "chai_0.pdb").write_text("dummy")
+    df = pd.DataFrame({"Entry": ["P1"], "docked_structure": ["chai_0"],
+                       "substrate_smiles": ["CCO.c1ccncc1"]})
+
+    class _FakeComplex:
+        interaction_sets = {"LIG:B:1": _FakeInteractions(),
+                            "LIG:C:2": _FakeInteractions()}
+        def load_pdb(self, p): pass
+        def analyze(self): pass
+    monkeypatch.setattr(plip_mod, "PDBComplex", _FakeComplex, raising=True)
+
+    # return a different chain per substrate so both are analyzable
+    calls = {"n": 0}
+    def _fake_select(path, smiles):
+        calls["n"] += 1
+        return ("B", 1, "LIG") if calls["n"] == 1 else ("C", 2, "LIG")
+    monkeypatch.setattr(plip_mod, "select_ligand_from_smiles_via_composition",
+                        _fake_select, raising=True)
+
+    step = PLIP(input_dir=str(tmp_path), output_dir=str(tmp_path / "out"))
+    out = step.execute(df)
+    cols = set(out.columns)
+    assert "plip_hydrogen_nbonds_s0" in cols
+    assert "plip_hydrogen_nbonds_s1" in cols
+    # single-substrate contract preserved: no unsuffixed key in together mode
+    assert "plip_hydrogen_nbonds" not in cols
+```
+
+- [ ] **Step 2: Run the test to verify it fails**
+
+Run: `pytest -p no:cacheprovider tests/test_plip_multi_substrate.py -v`
+Expected: FAIL — only unsuffixed `plip_*` keys are produced today.
+
+- [ ] **Step 3: Implement the per-substrate loop**
+
+In `structurezyme/steps/plip_step.py`, add to the helpers import (line 13):
+
+```python
+from structurezyme.utils.helpers import get_hetatm_chain_ids, extract_chain_as_rdkit_mol, closest_ligands_by_element_composition
+from structurezyme.utils.helpers import iter_substrates
+from structurezyme.steps.geometric_filtering_cofactor_MCS import _suffix_keys
+```
+
+Refactor the per-row body (lines 111-163). Move `prot.analyze()` out of the
+per-substrate work, extract the interaction counting into a closure keyed by
+substrate SMILES, and loop:
+
+```python
+            try:
+                default_result = {
+                    'plip_hydrogen_nbonds': None,
+                    'plip_hydrophobic_contacts': None,
+                    'plip_salt_bridges': None,
+                    'plip_pi_stacking': None,
+                    'plip_pi_cation': None,
+                    'plip_halogen_bonds': None,
+                    'plip_water_bridges': None,
+                    'plip_metal_complexes': None,
+                }
+
+                with suppress_stdout_stderr():
+                    prot = PDBComplex()
+                    prot.load_pdb(pdb_file_as_str)
+                    prot.analyze()
+
+                def _analyze(sub_smiles):
+                    r = dict(default_result)
+                    ligand = select_ligand_from_smiles_via_composition(
+                        pdb_file_as_path, sub_smiles)
+                    if not ligand:
+                        return r
+                    chain_id, resseq, resname = ligand
+                    formatted_ligand_id = f"{resname}:{chain_id}:{resseq}"
+                    interactions = prot.interaction_sets[formatted_ligand_id]
+                    r['plip_hydrogen_nbonds'] = (
+                        len(interactions.hbonds_ldon) + len(interactions.hbonds_pdon))
+                    r['plip_hydrophobic_contacts'] = len(interactions.hydrophobic_contacts)
+                    r['plip_salt_bridges'] = (
+                        len(interactions.saltbridge_pneg) + len(interactions.saltbridge_lneg))
+                    r['plip_pi_stacking'] = len(interactions.pistacking)
+                    r['plip_pi_cation'] = (
+                        len(interactions.pication_laro) + len(interactions.pication_paro))
+                    r['plip_halogen_bonds'] = len(interactions.halogen_bonds)
+                    r['plip_water_bridges'] = len(interactions.water_bridges)
+                    r['plip_metal_complexes'] = len(interactions.metal_complexes)
+                    return r
+
+                subs = iter_substrates(row)
+                if len(subs) <= 1:
+                    row_result.update(_analyze(substrate_smiles))
+                else:
+                    for i, (s_smiles, _n, _m) in enumerate(subs):
+                        row_result.update(_suffix_keys(_analyze(s_smiles), i))
+
+            except Exception as e:
+                logger.error(f"Error processing {entry_name}: {e}")
+                row_result.update(default_result)
+
+            results.append(row_result)
+```
+
+- [ ] **Step 4: Run the test to verify it passes**
+
+Run: `pytest -p no:cacheprovider tests/test_plip_multi_substrate.py -v`
+Expected: PASS.
+
+- [ ] **Step 5: Run the full suite**
+
+Run: `pytest -p no:cacheprovider`
+Expected: +1 test over prior total, 3 skipped. Existing single-substrate plip
+tests unchanged.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add structurezyme/steps/plip_step.py tests/test_plip_multi_substrate.py
+git -c core.fsync=none commit -m "feat: per-substrate plip columns in together mode"
+```
+
+### Task 9c: Ligand SASA per-substrate `_s{i}` columns
+
+`ligandSASA_step.py` computes buried-SASA for ONE ligand per row (chain picked
+via `select_ligand_from_smiles_via_composition`, ligandSASA_step.py:20-76). In
+`together` mode, compute SASA for each substrate's chain and emit its 4 metrics
+suffixed `_s{i}`.
+
+**Files:**
+- Modify: `structurezyme/steps/ligandSASA_step.py:93-161` (`__execute` per-row)
+- Test: `tests/test_ligand_sasa_multi_substrate.py` (create)
+
+**Interfaces:**
+- Consumes: `iter_substrates` (Task 2); `_suffix_keys` (Task 9);
+  `select_ligand_from_smiles_via_composition`, `SingleLigandSelect`, `freesasa`
+  (same module).
+- Produces (together mode): `sasa_ligand_in_complex_s{i}`,
+  `sasa_ligand_alone_s{i}`, `buried_sasa_s{i}`, `percentage_buried_sasa_s{i}`.
+  Single-substrate: unsuffixed (unchanged).
+
+- [ ] **Step 1: Write the failing test**
+
+Create `tests/test_ligand_sasa_multi_substrate.py`:
+
+```python
+# tests/test_ligand_sasa_multi_substrate.py
+import pandas as pd
+import structurezyme.steps.ligandSASA_step as sasa_mod
+from structurezyme.steps.ligandSASA_step import LigandSASA
+
+
+def test_sasa_together_emits_per_substrate_keys(tmp_path, monkeypatch):
+    (tmp_path / "chai_0.pdb").write_text("dummy")
+    df = pd.DataFrame({"Entry": ["P1"], "docked_structure": ["chai_0"],
+                       "substrate_smiles": ["CCO.c1ccncc1"]})
+
+    calls = {"n": 0}
+    def _fake_select(path, smiles):
+        calls["n"] += 1
+        return ("B", 1, "LIG") if calls["n"] == 1 else ("C", 2, "LIG")
+    monkeypatch.setattr(sasa_mod, "select_ligand_from_smiles_via_composition",
+                        _fake_select, raising=True)
+
+    # stub the freesasa machinery so no real SASA runs
+    class _FakeStruct: pass
+    monkeypatch.setattr(sasa_mod.freesasa, "Structure",
+                        lambda *a, **k: _FakeStruct(), raising=True)
+    class _FakeResult:
+        def totalArea(self): return 100.0
+    monkeypatch.setattr(sasa_mod.freesasa, "calc",
+                        lambda s: _FakeResult(), raising=True)
+    monkeypatch.setattr(sasa_mod.freesasa, "selectArea",
+                        lambda sel, s, r: {"ligand": 40.0}, raising=True)
+    # stub the Bio.PDB save path
+    monkeypatch.setattr(sasa_mod, "PDBParser",
+                        lambda QUIET=True: type("P", (), {
+                            "get_structure": lambda self, n, p: {0: object()}})(),
+                        raising=True)
+    monkeypatch.setattr(sasa_mod, "PDBIO",
+                        lambda: type("IO", (), {
+                            "set_structure": lambda self, s: None,
+                            "save": lambda self, p, select=None: open(p, "w").close(),
+                        })(), raising=True)
+
+    step = LigandSASA(input_dir=str(tmp_path), output_dir=str(tmp_path / "out"))
+    out = step.execute(df)
+    cols = set(out.columns)
+    assert "buried_sasa_s0" in cols
+    assert "buried_sasa_s1" in cols
+    assert "buried_sasa" not in cols
+```
+
+- [ ] **Step 2: Run the test to verify it fails**
+
+Run: `pytest -p no:cacheprovider tests/test_ligand_sasa_multi_substrate.py -v`
+Expected: FAIL — only unsuffixed SASA keys produced today.
+
+- [ ] **Step 3: Implement the per-substrate loop**
+
+In `structurezyme/steps/ligandSASA_step.py`, add to imports (after line 15):
+
+```python
+from structurezyme.utils.helpers import iter_substrates
+from structurezyme.steps.geometric_filtering_cofactor_MCS import _suffix_keys
+```
+
+Refactor the per-row body (lines 116-159) into a `_analyze(sub_smiles)` closure
+returning the 4-key dict, then loop:
+
+```python
+            def _analyze(sub_smiles):
+                r = dict(default_result)
+                ligand = select_ligand_from_smiles_via_composition(
+                    pdb_file, sub_smiles)
+                if not ligand:
+                    return r
+                chain_id, resseq, resname = ligand
+                with TemporaryDirectory() as tmpdir:
+                    ligand_path = Path(tmpdir) / "ligand.pdb"
+                    io = PDBIO()
+                    structure = PDBParser(QUIET=True).get_structure("s", str(pdb_file))[0]
+                    io.set_structure(structure)
+                    io.save(str(ligand_path),
+                            select=SingleLigandSelect(chain_id, resseq, resname))
+                    structure_complex = freesasa.Structure(str(pdb_file), options={'hetatm': True})
+                    structure_ligand = freesasa.Structure(str(ligand_path), options={'hetatm': True})
+                result_ligand = freesasa.calc(structure_ligand)
+                result_complex = freesasa.calc(structure_complex)
+                selection = [f"ligand, chain {chain_id} and resn {resname} and resi {resseq}"]
+                sasa_in_complex = freesasa.selectArea(selection, structure_complex, result_complex)
+                sasa_alone = result_ligand.totalArea()
+                buried = sasa_alone - sasa_in_complex["ligand"]
+                pct = (buried / sasa_alone) * 100 if sasa_alone > 0 else 0.0
+                r['sasa_ligand_in_complex'] = sasa_in_complex["ligand"]
+                r['sasa_ligand_alone'] = sasa_alone
+                r['buried_sasa'] = buried
+                r['percentage_buried_sasa'] = pct
+                return r
+
+            try:
+                subs = iter_substrates(row)
+                if len(subs) <= 1:
+                    row_result.update(_analyze(substrate_smiles))
+                else:
+                    for i, (s_smiles, _n, _m) in enumerate(subs):
+                        row_result.update(_suffix_keys(_analyze(s_smiles), i))
+            except Exception as e:
+                logger.error(f"Error processing {entry_name}: {e}")
+                row_result.update(default_result)
+
+            results.append(row_result)
+```
+
+(Note: `default_result` is already defined above at lines 101-105; keep it
+where it is so the closure can close over it.)
+
+- [ ] **Step 4: Run the test to verify it passes**
+
+Run: `pytest -p no:cacheprovider tests/test_ligand_sasa_multi_substrate.py -v`
+Expected: PASS.
+
+- [ ] **Step 5: Run the full suite**
+
+Run: `pytest -p no:cacheprovider`
+Expected: +1 test over prior total, 3 skipped.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add structurezyme/steps/ligandSASA_step.py tests/test_ligand_sasa_multi_substrate.py
+git -c core.fsync=none commit -m "feat: per-substrate ligand SASA columns in together mode"
+```
+
+### Task 9d: fpocket per-substrate `_s{i}` columns
+
+`fpocket_step.py._process_single_row_with_fpocket` (lines 239-334) runs fpocket
+ONCE, steering the `-r` pocket hint to the single substrate's chain via
+`fpocket_r_from_smiles_via_composition(pdb_path, substrate_smiles)` (line 271),
+then parses pocket features + SASA into a `pd.Series`. In `together` mode we run
+fpocket once PER substrate (each with its own `-r` hint and its own output dir),
+suffixing the parsed feature keys `_s{i}`. This step returns a `pd.Series` per
+row (not a dict), so the suffixing merges Series.
+
+**Files:**
+- Modify: `structurezyme/steps/fpocket_step.py:239-334`
+  (`_process_single_row_with_fpocket`)
+- Test: `tests/test_fpocket_multi_substrate.py` (create)
+
+**Interfaces:**
+- Consumes: `iter_substrates` (Task 2); `_suffix_keys` (Task 9);
+  `fpocket_r_from_smiles_via_composition`, `extract_fpocket_features`,
+  `extract_SASA` (same module).
+- Produces (together mode): each substrate's pocket-feature + SASA keys suffixed
+  `_s{i}`, plus `ASvolume_dir_s{i}`. Single-substrate: unsuffixed (unchanged).
+
+- [ ] **Step 1: Confirm the class name**
+
+Open `structurezyme/steps/fpocket_step.py` and note the Step subclass name
+(the `class ...(Step)` that defines `_process_single_row_with_fpocket`). Use
+that exact name in the test import and `monkeypatch.setattr` target below
+(shown as `Fpocket`).
+
+- [ ] **Step 2: Write the failing test**
+
+Create `tests/test_fpocket_multi_substrate.py`:
+
+```python
+# tests/test_fpocket_multi_substrate.py
+import pandas as pd
+import structurezyme.steps.fpocket_step as fp_mod
+from structurezyme.steps.fpocket_step import Fpocket  # class name per Step 1
+
+
+def test_fpocket_together_emits_per_substrate_keys(tmp_path, monkeypatch):
+    prepared = tmp_path / "prep"; prepared.mkdir()
+    (prepared / "chai_0.pdb").write_text("dummy")
+    out = tmp_path / "out"; out.mkdir()
+    df = pd.DataFrame({"Entry": ["P1"], "docked_structure": ["chai_0"],
+                       "substrate_smiles": ["CCO.c1ccncc1"]})
+
+    # stub the single-substrate worker to a deterministic feature Series so the
+    # test targets ONLY the per-substrate suffixing/merge logic
+    def _fake_single(self, row, sub_smiles):
+        return pd.Series({"ASvolume_dir": "/x",
+                          "pocket_volume": 123.0,
+                          "pocket_sasa": 45.0})
+    monkeypatch.setattr(fp_mod.Fpocket, "_fpocket_one_substrate",
+                        _fake_single, raising=False)
+
+    step = fp_mod.Fpocket(preparedfiles_dir=str(prepared), output_dir=str(out),
+                          num_threads=1)
+    res = step.execute(df)
+    cols = set(res.columns)
+    assert "pocket_volume_s0" in cols
+    assert "pocket_volume_s1" in cols
+    assert "pocket_volume" not in cols
+```
+
+- [ ] **Step 3: Run the test to verify it fails**
+
+Run: `pytest -p no:cacheprovider tests/test_fpocket_multi_substrate.py -v`
+Expected: FAIL — `_fpocket_one_substrate` does not exist and no `_s{i}` keys.
+
+- [ ] **Step 4: Extract a per-substrate worker and loop over substrates**
+
+In `structurezyme/steps/fpocket_step.py`, add imports (near the top, with the
+other `from structurezyme...` imports) and `import hashlib`:
+
+```python
+import hashlib
+from structurezyme.utils.helpers import iter_substrates
+from structurezyme.steps.geometric_filtering_cofactor_MCS import _suffix_keys
+```
+
+Rename the existing per-row worker's core to take an explicit substrate SMILES.
+Rename `_process_single_row_with_fpocket` (line 239) to
+`_fpocket_one_substrate(self, row, sub_smiles)`, and inside it:
+- replace `substrate_smiles = row.get("substrate_smiles")` (line 242) with
+  `substrate_smiles = sub_smiles`;
+- make `final_out_dir` unique per substrate (line 295):
+  ```python
+  sub_tag = hashlib.md5(str(sub_smiles).encode()).hexdigest()[:6]
+  final_out_dir = self.output_dir / f"{pdb_file_path.stem}_{sub_tag}_fpocket_output"
+  ```
+
+Then add a new dispatcher with the ORIGINAL method name so `__execute`
+(lines 337-354) keeps calling it unchanged:
+
+```python
+    def _process_single_row_with_fpocket(self, row: pd.Series) -> pd.Series:
+        subs = iter_substrates(row)
+        if len(subs) <= 1:
+            return self._fpocket_one_substrate(
+                row, subs[0][0] if subs else row.get("substrate_smiles"))
+        merged = {}
+        for i, (s_smiles, _n, _m) in enumerate(subs):
+            s = self._fpocket_one_substrate(row, s_smiles)
+            merged.update(_suffix_keys(dict(s), i))
+        return pd.Series(merged)
+```
+
+- [ ] **Step 5: Run the test to verify it passes**
+
+Run: `pytest -p no:cacheprovider tests/test_fpocket_multi_substrate.py -v`
+Expected: PASS.
+
+- [ ] **Step 6: Run the full suite**
+
+Run: `pytest -p no:cacheprovider`
+Expected: +1 test over prior total, 3 skipped. Existing single-substrate
+fpocket tests unchanged (the dispatcher's `len(subs) <= 1` branch calls the same
+worker with the same substrate SMILES as before).
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add structurezyme/steps/fpocket_step.py tests/test_fpocket_multi_substrate.py
+git -c core.fsync=none commit -m "feat: per-substrate fpocket columns in together mode"
+```
 
 ### Task 10: CLI init template exposes `multi_substrate_mode`
 
@@ -1647,16 +2058,11 @@ modes (Task 3).
 `_together_skips_vina(mode, df)`, `_match_substrate_chains(ligands, smiles_list)`,
 `_suffix_keys(result, idx)`.
 
-**Known gap (must resolve at execution time):** Tasks **9b, 9c, 9d** (plip,
-ligand_sasa, fpocket) are specified by reference to the Task 9 pattern rather
-than with full per-file line numbers and complete code. Before executing each,
-the implementer MUST open the target step
-(`structurezyme/steps/{plip,ligand_sasa,fpocket}_step.py`), locate its per-row
-ligand-analysis block, and apply the Task 9 transformation (import
-`iter_substrates` + `_suffix_keys`, extract a `_analyze(sub_smiles, ...)`
-closure, loop substrates in together mode). Recommended: expand each into a
-full task (test code + exact edits) just-in-time, the same way Task 9 is
-written, immediately before implementing it.
+**Resolved:** Tasks **9b (plip), 9c (ligand_sasa), 9d (fpocket)** are now fully
+fleshed out with exact file/line references, complete test code, and complete
+implementation edits — no remaining by-reference placeholders. The one residual
+verification the executor must do is confirm the fpocket Step subclass name
+(Task 9d Step 1); everything else is concrete.
 
 ## Execution Handoff
 
