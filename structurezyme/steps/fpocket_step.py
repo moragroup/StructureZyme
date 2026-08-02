@@ -240,7 +240,7 @@ class Fpocket(Step):
 
     # This function processes a SINGLE row for ONE substrate and returns its
     # result (a pd.Series). Called once per substrate in `together` mode.
-    def _fpocket_one_substrate(self, row: pd.Series, sub_smiles) -> pd.Series:
+    def _fpocket_one_substrate(self, row: pd.Series, sub_smiles, tag=None) -> pd.Series:
         best_structure_name = row['docked_structure']
         pdb_file_path = self.preparedfiles_dir / f"{best_structure_name}.pdb"
         substrate_smiles = sub_smiles
@@ -296,8 +296,12 @@ class Fpocket(Step):
                 logger.warning(f"fpocket output directory not found in temp dir after successful run for {pdb_file_path.stem}: {expected_out_dir_in_temp}")
                 return pd.Series(row_results, index=row_results.keys())
             
-            sub_tag = hashlib.md5(str(sub_smiles).encode()).hexdigest()[:6]
-            final_out_dir = self.output_dir / f"{pdb_file_path.stem}_{sub_tag}_fpocket_output"
+            # Single-substrate/off mode (tag is None) keeps the legacy directory
+            # name so the surfaced `ASvolume_dir` column value is byte-for-byte
+            # unchanged. In `together` mode each substrate gets a distinct tag so
+            # per-substrate output dirs do not collide.
+            stem = pdb_file_path.stem if tag is None else f"{pdb_file_path.stem}_{tag}"
+            final_out_dir = self.output_dir / f"{stem}_fpocket_output"
             
             if final_out_dir.exists():
                 logger.warning(f"Existing fpocket output for {pdb_file_path.stem} found at {final_out_dir}. Removing old fpocket output.")
@@ -350,7 +354,8 @@ class Fpocket(Step):
                 row, subs[0][0] if subs else row.get("substrate_smiles"))
         merged = {}
         for i, (s_smiles, _n, _m) in enumerate(subs):
-            s = self._fpocket_one_substrate(row, s_smiles)
+            sub_tag = hashlib.md5(str(s_smiles).encode()).hexdigest()[:6]
+            s = self._fpocket_one_substrate(row, s_smiles, tag=sub_tag)
             merged.update(_suffix_keys(dict(s), i))
         return pd.Series(merged)
 
