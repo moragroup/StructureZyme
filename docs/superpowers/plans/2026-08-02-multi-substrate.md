@@ -10,7 +10,9 @@
 
 ## Global Constraints
 
-- Default `multi_substrate_mode` MUST be `"off"`; with `off`, every existing frame, column name, and checkpoint hash is byte-for-byte unchanged (197 passed / 3 skipped baseline stays green).
+- Default `multi_substrate_mode` MUST be `"off"`; with `off`, every existing frame, column name, and checkpoint hash is byte-for-byte unchanged.
+- **Test command (binding, corrected):** run `python3 -m pytest -p no:cacheprovider` — NOT bare `pytest`. In this worktree, bare `pytest` loads `structurezyme` from the MAIN checkout (`/mnt/storage01/home/lherrmann/structurezyme/structurezyme`) via the editable-install `.pth` finder and does NOT test the worktree code; `python3 -m pytest` prepends the worktree cwd to `sys.path` so the worktree code wins. All task Step commands that say `pytest ...` mean `python3 -m pytest ...`.
+- **Baseline (corrected, measured 2026-08-02):** `211 passed, 3 skipped, 4 failed`. The 4 failures are PRE-EXISTING and unrelated to this work — they live in `tools/test_pipeline.py` (deprecated `Pipeline` adapter, `AttributeError: 'Pipeline' object has no attribute 'squidly_model_size'`). Every task must keep these same 4 failures (never more, never fewer), keep 3 skipped, and GROW the passed count by the number of new tests it adds. No task may touch `tools/test_pipeline.py` or `structurezyme/pipeline.py`. Per-task "Expected: N passed" numbers in the task bodies are relative to this 211 baseline; treat the +delta, not the absolute legacy 197/201 figures, as authoritative.
 - Multi-substrate delimiters (verbatim): `substrate_smiles` joins substrates with `.` (matches docko Chai native split); `substrate_name` and `substrate_moiety` parallel lists join with `|`.
 - `separate` mode suffixes only expanded rows: `Entry` → `{Entry}__s{i}`; single-substrate rows are NOT expanded and NOT suffixed.
 - `enzyme_id` column is added in ALL modes and equals `Entry` for single-substrate rows (it is the grouping key).
