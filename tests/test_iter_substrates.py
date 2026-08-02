@@ -41,3 +41,9 @@ def test_nan_optional_columns_treated_as_absent():
                    "substrate_name": float("nan"),
                    "substrate_moiety": None})
     assert iter_substrates(s) == [("CCO", "", ""), ("O", "", "")]
+
+
+def test_long_parallel_list_truncates():
+    row = {"substrate_smiles": "CCO.O",
+           "substrate_name": "a|b|c", "substrate_moiety": "x|y|z"}
+    assert iter_substrates(row) == [("CCO", "a", "x"), ("O", "b", "y")]
