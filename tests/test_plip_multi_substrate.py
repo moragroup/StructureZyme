@@ -88,3 +88,40 @@ def test_plip_together_mode_does_not_hard_filter_row(tmp_path, monkeypatch):
     assert len(out) == 1
     assert out.loc[0, "plip_hydrogen_nbonds_s0"] == 0
     assert out.loc[0, "plip_hydrogen_nbonds_s1"] is None
+
+
+def test_plip_together_unexpected_substrate_error_does_not_leak_unsuffixed_keys(tmp_path, monkeypatch):
+    """If a substrate raises an UNEXPECTED error mid-loop (not the guarded
+    'no ligand' path), its failure must stay isolated as a suffixed _s{i} None
+    block -- it must NOT fall through to the outer handler and write UNSUFFIXED
+    keys that mix with the good substrate's _s0 columns."""
+    (tmp_path / "chai_0.pdb").write_text("dummy")
+    df = pd.DataFrame({"Entry": ["P1"], "docked_structure": ["chai_0"],
+                       "substrate_smiles": ["CCO.c1ccncc1"]})
+
+    class _FakeComplex:
+        interaction_sets = {"LIG:B:1": _FakeInteractions()}
+        def load_pdb(self, p): pass
+        def analyze(self): pass
+    monkeypatch.setattr(plip_mod, "PDBComplex", _FakeComplex, raising=True)
+
+    calls = {"n": 0}
+    def _fake_select(path, smiles):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return ("B", 1, "LIG")
+        raise RuntimeError("boom: unexpected failure on substrate #1")
+    monkeypatch.setattr(plip_mod, "select_ligand_from_smiles_via_composition",
+                        _fake_select, raising=True)
+
+    step = PLIP(input_dir=str(tmp_path), output_dir=str(tmp_path / "out"))
+    out = step.execute(df)
+    cols = set(out.columns)
+
+    assert len(out) == 1
+    # good substrate keeps its suffixed value; failed substrate is a suffixed None
+    assert out.loc[0, "plip_hydrogen_nbonds_s0"] == 0
+    assert out.loc[0, "plip_hydrogen_nbonds_s1"] is None
+    # NO unsuffixed key leaks into the together-mode row
+    assert "plip_hydrogen_nbonds" not in cols
+    assert "plip_salt_bridges" not in cols

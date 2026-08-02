@@ -305,7 +305,17 @@ def run_boltz(ctx, spec) -> pd.DataFrame:
     num_threads = ctx.config.runtime.num_threads
     df_chai = _first_input(ctx, spec)
 
+    # In together mode we hand Boltz a COLLAPSED frame (substrate #0 in
+    # ``substrate_smiles``, substrate #1 routed into ``cofactor_smiles``) because
+    # docko can only route one extra ligand SMILES. But the PACKED
+    # ``substrate_smiles`` (all substrates joined by ``.``) must survive into the
+    # downstream frame so the per-substrate analysis steps can re-expand it via
+    # ``iter_substrates`` and emit their ``_s{i}`` columns. So we remember the
+    # original packed values here and restore them onto the Boltz output BEFORE
+    # it is saved/returned (Boltz itself never sees the packed value).
+    packed_substrate_smiles = None
     if ctx.config.multi_substrate_mode == "together":
+        packed_substrate_smiles = df_chai["substrate_smiles"].copy()
         df_chai = _boltz_together_frame(df_chai)
 
     boltz_dir = out_dir / "boltz/"
@@ -320,11 +330,15 @@ def run_boltz(ctx, spec) -> pd.DataFrame:
     # cuequivariance_ops_torch); the pure-PyTorch fallback is always available.
     boltz_args.append("--no_kernels")
 
-    df_boltz = df_chai << (
-        Boltz("Entry", "Sequence", "substrate_smiles", "cofactor_smiles", boltz_dir,
-              num_threads, args=boltz_args)
-        >> Save(out_dir / "boltz.pkl")
-    )
+    # Run Boltz on the collapsed frame, restore the packed substrate_smiles, and
+    # only THEN save/persist so the downstream frame (and boltz.pkl) carries the
+    # packed value.
+    df_boltz = df_chai << Boltz(
+        "Entry", "Sequence", "substrate_smiles", "cofactor_smiles", boltz_dir,
+        num_threads, args=boltz_args)
+    if packed_substrate_smiles is not None:
+        df_boltz["substrate_smiles"] = packed_substrate_smiles.values
+    df_boltz = df_boltz << Save(out_dir / "boltz.pkl")
     df_boltz.rename(columns={"output_dir": "boltz_dir"}, inplace=True)
     return df_boltz
 

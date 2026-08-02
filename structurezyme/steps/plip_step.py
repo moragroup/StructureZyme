@@ -131,25 +131,35 @@ class PLIP(Step):
                     prot.analyze()
 
                 def _analyze(sub_smiles):
+                    # Per-substrate failures are isolated INSIDE the closure (as
+                    # in geometric_filtering_cofactor_MCS) so that one bad
+                    # substrate yields its own suffixed None-block rather than
+                    # letting the outer handler write UNSUFFIXED keys that would
+                    # mix with the good substrate's `_s{i}` columns.
                     r = dict(default_result)
-                    ligand = select_ligand_from_smiles_via_composition(
-                        pdb_file_as_path, sub_smiles)
-                    if not ligand:
-                        return r
-                    chain_id, resseq, resname = ligand
-                    formatted_ligand_id = f"{resname}:{chain_id}:{resseq}"
-                    interactions = prot.interaction_sets[formatted_ligand_id]
-                    r['plip_hydrogen_nbonds'] = (
-                        len(interactions.hbonds_ldon) + len(interactions.hbonds_pdon))
-                    r['plip_hydrophobic_contacts'] = len(interactions.hydrophobic_contacts)
-                    r['plip_salt_bridges'] = (
-                        len(interactions.saltbridge_pneg) + len(interactions.saltbridge_lneg))
-                    r['plip_pi_stacking'] = len(interactions.pistacking)
-                    r['plip_pi_cation'] = (
-                        len(interactions.pication_laro) + len(interactions.pication_paro))
-                    r['plip_halogen_bonds'] = len(interactions.halogen_bonds)
-                    r['plip_water_bridges'] = len(interactions.water_bridges)
-                    r['plip_metal_complexes'] = len(interactions.metal_complexes)
+                    try:
+                        ligand = select_ligand_from_smiles_via_composition(
+                            pdb_file_as_path, sub_smiles)
+                        if not ligand:
+                            return r
+                        chain_id, resseq, resname = ligand
+                        formatted_ligand_id = f"{resname}:{chain_id}:{resseq}"
+                        interactions = prot.interaction_sets[formatted_ligand_id]
+                        r['plip_hydrogen_nbonds'] = (
+                            len(interactions.hbonds_ldon) + len(interactions.hbonds_pdon))
+                        r['plip_hydrophobic_contacts'] = len(interactions.hydrophobic_contacts)
+                        r['plip_salt_bridges'] = (
+                            len(interactions.saltbridge_pneg) + len(interactions.saltbridge_lneg))
+                        r['plip_pi_stacking'] = len(interactions.pistacking)
+                        r['plip_pi_cation'] = (
+                            len(interactions.pication_laro) + len(interactions.pication_paro))
+                        r['plip_halogen_bonds'] = len(interactions.halogen_bonds)
+                        r['plip_water_bridges'] = len(interactions.water_bridges)
+                        r['plip_metal_complexes'] = len(interactions.metal_complexes)
+                    except Exception as e:
+                        logger.error(f"Error processing {entry_name} substrate "
+                                     f"{sub_smiles!r}: {e}")
+                        return dict(default_result)
                     return r
 
                 subs = iter_substrates(row)
