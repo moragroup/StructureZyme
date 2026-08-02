@@ -32,6 +32,8 @@ from pathlib import Path
 
 import pandas as pd
 
+from structurezyme.utils.helpers import iter_substrates
+
 
 # --------------------------------------------------------------------------
 # Directory / input helpers
@@ -260,6 +262,39 @@ def run_chai(ctx, spec) -> pd.DataFrame:
     return df_chai
 
 
+def _boltz_together_frame(df: pd.DataFrame) -> pd.DataFrame:
+    """Route a together-mode frame for Boltz co-docking.
+
+    substrate #0 stays the affinity binder in ``substrate_smiles``; substrate
+    #1 (if any) is written to ``cofactor_smiles`` (docko ``id:C``). Enforces the
+    2-substrate cap and rejects a 2nd substrate when a real cofactor already
+    exists, because docko can only route one extra ligand SMILES safely.
+    """
+    out = df.copy()
+    new_sub, new_cof = [], []
+    existing = out["cofactor_smiles"] if "cofactor_smiles" in out.columns else None
+    for pos, (_, row) in enumerate(out.iterrows()):
+        subs = iter_substrates(row)
+        if len(subs) > 2:
+            raise ValueError(
+                f"together-mode Boltz supports at most 2 substrates, got "
+                f"{len(subs)} for Entry={row['Entry']!r}"
+            )
+        prior = "" if existing is None else str(existing.iloc[pos] or "")
+        if prior in ("", "nan", "None"):
+            prior = ""
+        if len(subs) == 2 and prior:
+            raise ValueError(
+                f"together-mode Boltz cannot co-dock a 2nd substrate together "
+                f"with a pre-existing cofactor for Entry={row['Entry']!r}"
+            )
+        new_sub.append(subs[0][0])
+        new_cof.append(subs[1][0] if len(subs) == 2 else prior)
+    out["substrate_smiles"] = new_sub
+    out["cofactor_smiles"] = new_cof
+    return out
+
+
 def run_boltz(ctx, spec) -> pd.DataFrame:
     """Port of Docking._run_boltz."""
     from enzymetk.dock_boltz_step import Boltz
@@ -269,6 +304,9 @@ def run_boltz(ctx, spec) -> pd.DataFrame:
     out_dir = _docking_dir(ctx)
     num_threads = ctx.config.runtime.num_threads
     df_chai = _first_input(ctx, spec)
+
+    if ctx.config.multi_substrate_mode == "together":
+        df_chai = _boltz_together_frame(df_chai)
 
     boltz_dir = out_dir / "boltz/"
     boltz_dir.mkdir(exist_ok=True, parents=True)
