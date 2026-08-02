@@ -349,7 +349,7 @@ def run_vina(ctx, spec) -> pd.DataFrame:
     out_dir = _docking_dir(ctx)
     df_boltz = _first_input(ctx, spec)
 
-    if _together_skips_vina(getattr(ctx.config, "multi_substrate_mode", "off"), df_boltz):
+    if _together_skips_vina(ctx.config.multi_substrate_mode, df_boltz):
         log_boxed_note(
             "Skipping vina docking (together-mode co-docking) for all rows; "
             "using chai/boltz co-folded poses."
