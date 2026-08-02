@@ -332,7 +332,14 @@ def run_boltz(ctx, spec) -> pd.DataFrame:
 
     # Run Boltz on the collapsed frame, restore the packed substrate_smiles, and
     # only THEN save/persist so the downstream frame (and boltz.pkl) carries the
-    # packed value.
+    # packed value. NOTE: in together mode ``cofactor_smiles`` still holds
+    # substrate #1 downstream (that is how docko co-docked it). So substrate #1
+    # is intentionally represented twice: once in the packed ``substrate_smiles``
+    # (re-expanded by iter_substrates into its own ``_s{i}`` analysis columns)
+    # and once in ``cofactor_smiles``. Any step that reads ``cofactor_smiles`` as
+    # a genuine cofactor (e.g. geometric_filter's distance_ligand_to_cofactor)
+    # is therefore measuring against substrate #1, not a real cofactor, in
+    # together mode -- consumers must not misread it.
     df_boltz = df_chai << Boltz(
         "Entry", "Sequence", "substrate_smiles", "cofactor_smiles", boltz_dir,
         num_threads, args=boltz_args)

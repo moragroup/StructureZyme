@@ -110,68 +110,72 @@ class PLIP(Step):
                     f"Prepared PDB not found for {best_structure_name}: {pdb_file_as_path}"
                 )
 
+            # Default result structure
+            default_result = {
+                'plip_hydrogen_nbonds': None,
+                'plip_hydrophobic_contacts': None,
+                'plip_salt_bridges': None,
+                'plip_pi_stacking': None,
+                'plip_pi_cation': None,
+                'plip_halogen_bonds': None,
+                'plip_water_bridges': None,
+                'plip_metal_complexes': None,
+            }
+
+            # load and analyze the docked structure (once per PDB). A load/analyze
+            # failure is per-ROW (not per-substrate) so `prot` is left None and
+            # every substrate falls back to a default (correctly-suffixed) block
+            # below -- this never writes UNSUFFIXED keys in together mode.
+            prot = None
             try:
-
-                # Default result structure
-                default_result = {
-                    'plip_hydrogen_nbonds': None,
-                    'plip_hydrophobic_contacts': None,
-                    'plip_salt_bridges': None,
-                    'plip_pi_stacking': None, 
-                    'plip_pi_cation': None,
-                    'plip_halogen_bonds': None, 
-                    'plip_water_bridges': None,
-                    'plip_metal_complexes': None,
-                }
-
-                # load and analyze the docked structure (once per PDB)
                 with suppress_stdout_stderr():
                     prot = PDBComplex()
                     prot.load_pdb(pdb_file_as_str)
                     prot.analyze()
-
-                def _analyze(sub_smiles):
-                    # Per-substrate failures are isolated INSIDE the closure (as
-                    # in geometric_filtering_cofactor_MCS) so that one bad
-                    # substrate yields its own suffixed None-block rather than
-                    # letting the outer handler write UNSUFFIXED keys that would
-                    # mix with the good substrate's `_s{i}` columns.
-                    r = dict(default_result)
-                    try:
-                        ligand = select_ligand_from_smiles_via_composition(
-                            pdb_file_as_path, sub_smiles)
-                        if not ligand:
-                            return r
-                        chain_id, resseq, resname = ligand
-                        formatted_ligand_id = f"{resname}:{chain_id}:{resseq}"
-                        interactions = prot.interaction_sets[formatted_ligand_id]
-                        r['plip_hydrogen_nbonds'] = (
-                            len(interactions.hbonds_ldon) + len(interactions.hbonds_pdon))
-                        r['plip_hydrophobic_contacts'] = len(interactions.hydrophobic_contacts)
-                        r['plip_salt_bridges'] = (
-                            len(interactions.saltbridge_pneg) + len(interactions.saltbridge_lneg))
-                        r['plip_pi_stacking'] = len(interactions.pistacking)
-                        r['plip_pi_cation'] = (
-                            len(interactions.pication_laro) + len(interactions.pication_paro))
-                        r['plip_halogen_bonds'] = len(interactions.halogen_bonds)
-                        r['plip_water_bridges'] = len(interactions.water_bridges)
-                        r['plip_metal_complexes'] = len(interactions.metal_complexes)
-                    except Exception as e:
-                        logger.error(f"Error processing {entry_name} substrate "
-                                     f"{sub_smiles!r}: {e}")
-                        return dict(default_result)
-                    return r
-
-                subs = iter_substrates(row)
-                if len(subs) <= 1:
-                    row_result.update(_analyze(substrate_smiles))
-                else:
-                    for i, (s_smiles, _n, _m) in enumerate(subs):
-                        row_result.update(_suffix_keys(_analyze(s_smiles), i))
-
             except Exception as e:
-                logger.error(f"Error processing {entry_name}: {e}")
-                row_result.update(default_result)
+                logger.error(f"Error loading/analyzing PDB for {entry_name}: {e}")
+                prot = None
+
+            def _analyze(sub_smiles):
+                # Per-substrate failures are isolated INSIDE the closure (as in
+                # geometric_filtering_cofactor_MCS / ligandSASA) so that one bad
+                # substrate yields its own suffixed None-block rather than
+                # writing UNSUFFIXED keys that would mix with the good
+                # substrate's `_s{i}` columns.
+                r = dict(default_result)
+                if prot is None:
+                    return r
+                try:
+                    ligand = select_ligand_from_smiles_via_composition(
+                        pdb_file_as_path, sub_smiles)
+                    if not ligand:
+                        return r
+                    chain_id, resseq, resname = ligand
+                    formatted_ligand_id = f"{resname}:{chain_id}:{resseq}"
+                    interactions = prot.interaction_sets[formatted_ligand_id]
+                    r['plip_hydrogen_nbonds'] = (
+                        len(interactions.hbonds_ldon) + len(interactions.hbonds_pdon))
+                    r['plip_hydrophobic_contacts'] = len(interactions.hydrophobic_contacts)
+                    r['plip_salt_bridges'] = (
+                        len(interactions.saltbridge_pneg) + len(interactions.saltbridge_lneg))
+                    r['plip_pi_stacking'] = len(interactions.pistacking)
+                    r['plip_pi_cation'] = (
+                        len(interactions.pication_laro) + len(interactions.pication_paro))
+                    r['plip_halogen_bonds'] = len(interactions.halogen_bonds)
+                    r['plip_water_bridges'] = len(interactions.water_bridges)
+                    r['plip_metal_complexes'] = len(interactions.metal_complexes)
+                except Exception as e:
+                    logger.error(f"Error processing {entry_name} substrate "
+                                 f"{sub_smiles!r}: {e}")
+                    return dict(default_result)
+                return r
+
+            subs = iter_substrates(row)
+            if len(subs) <= 1:
+                row_result.update(_analyze(substrate_smiles))
+            else:
+                for i, (s_smiles, _n, _m) in enumerate(subs):
+                    row_result.update(_suffix_keys(_analyze(s_smiles), i))
 
             results.append(row_result)
         return results

@@ -125,3 +125,29 @@ def test_plip_together_unexpected_substrate_error_does_not_leak_unsuffixed_keys(
     # NO unsuffixed key leaks into the together-mode row
     assert "plip_hydrogen_nbonds" not in cols
     assert "plip_salt_bridges" not in cols
+
+
+def test_plip_together_pdb_load_failure_yields_suffixed_none_no_leak(tmp_path, monkeypatch):
+    """A once-per-PDB load/analyze failure is per-ROW, but in together mode it
+    must still yield correctly-SUFFIXED None blocks for every substrate -- it
+    must NOT write unsuffixed default keys."""
+    (tmp_path / "chai_0.pdb").write_text("dummy")
+    df = pd.DataFrame({"Entry": ["P1"], "docked_structure": ["chai_0"],
+                       "substrate_smiles": ["CCO.c1ccncc1"]})
+
+    class _FakeComplex:
+        def load_pdb(self, p): pass
+        def analyze(self): raise RuntimeError("boom: analyze failed")
+    monkeypatch.setattr(plip_mod, "PDBComplex", _FakeComplex, raising=True)
+    monkeypatch.setattr(plip_mod, "select_ligand_from_smiles_via_composition",
+                        lambda path, smiles: ("B", 1, "LIG"), raising=True)
+
+    step = PLIP(input_dir=str(tmp_path), output_dir=str(tmp_path / "out"))
+    out = step.execute(df)
+    cols = set(out.columns)
+
+    assert len(out) == 1
+    # both substrates get suffixed None blocks; no unsuffixed key leaks
+    assert out.loc[0, "plip_hydrogen_nbonds_s0"] is None
+    assert out.loc[0, "plip_hydrogen_nbonds_s1"] is None
+    assert "plip_hydrogen_nbonds" not in cols
