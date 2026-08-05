@@ -85,6 +85,9 @@ is simply ignored by that step (but preserved in the written config).
 | `skip_catalytic_residue_prediction` | `false` | Skip the prediction entirely. |
 | `squidly_model_size` | `"3B"` | Squidly model size. |
 | `squidly_as_threshold` | `null` | Active-site score threshold. |
+| `squidly_mean_prob` | `null` | Ensemble mean-probability threshold (upstream default 0.6). Ignored if `squidly_num_residues` is set. |
+| `squidly_mean_var` | `null` | Ensemble variance cutoff (upstream default 0.225). Ignored if `squidly_num_residues` is set. |
+| `squidly_num_residues` | `null` | If set, return exactly this many catalytic residues (the N highest-mean positions), ignoring the mean/variance thresholds. Useful when a very low threshold is needed to surface the right residue so vina always gets a docking site. A warning is logged if a threshold is also set. |
 | `squidly_num_threads` | `runtime.num_threads` | Thread override for this step. |
 
 **`boltz`**
