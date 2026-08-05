@@ -52,6 +52,32 @@ def _select_residues_from_ensemble(mean, variance, mean_prob: float, mean_var: f
     return "|".join(str(int(p)) for p in picks)
 
 
+def _select_top_n_from_ensemble(mean, num_residues: int) -> str:
+    """Select the ``num_residues`` positions with the highest ensemble mean.
+
+    Pure top-N by mean probability, ignoring variance. Ties are broken by
+    lower residue index. If ``num_residues`` exceeds the number of scored
+    positions, all positions are returned. Returns a '|'-joined string of
+    0-indexed positions, ordered ascending by index (matching the threshold
+    path's output format).
+    """
+    import numpy as _np
+    if mean is None:
+        return ""
+    m = _np.asarray(mean, dtype=float)
+    if m.size == 0:
+        return ""
+    n = int(min(num_residues, m.size))
+    if n <= 0:
+        return ""
+    # Sort indices by (descending value, ascending index) so that ties are
+    # broken in favour of the lower index; take the first n of that order,
+    # then present them ascending by index.
+    order = sorted(range(m.size), key=lambda i: (-m[i], i))
+    picks = sorted(order[:n])
+    return "|".join(str(p) for p in picks)
+
+
 def _normalize_residues(value) -> str:
     """Coerce a Squidly residue prediction into a clean pipe-delimited string.
 
@@ -102,6 +128,7 @@ class Squidly(Step):
         as_threshold: float | None = None,
         mean_prob: float | None = None,
         mean_var: float | None = None,
+        num_residues: int | None = None,
         single_model: bool = False,
         cpu: bool = False,
         iterative: bool = False,
@@ -120,6 +147,16 @@ class Squidly(Step):
         self.as_threshold = as_threshold
         self.mean_prob = mean_prob
         self.mean_var = mean_var
+        if num_residues is not None:
+            if isinstance(num_residues, bool) or not isinstance(num_residues, int):
+                raise ValueError(
+                    f"num_residues must be a positive integer, got {num_residues!r}"
+                )
+            if num_residues < 1:
+                raise ValueError(
+                    f"num_residues must be >= 1, got {num_residues!r}"
+                )
+        self.num_residues = num_residues
         self.single_model = single_model
         self.cpu = cpu
         self.iterative = iterative
@@ -263,7 +300,24 @@ class Squidly(Step):
         #
         # This override is a no-op when the user leaves both thresholds at
         # None, so behaviour is backward-compatible with upstream defaults.
-        if (self.mean_prob is not None or self.mean_var is not None) \
+        #
+        # Opt-in top-N selection is an INDEPENDENT feature, not part of the
+        # upstream workaround above: it must be retained when that workaround
+        # is eventually removed. When num_residues is set it wins over the
+        # mean_prob/mean_var thresholds (pure top-N by mean, variance ignored).
+        if self.num_residues is not None and "mean" in df_pred.columns:
+            if self.mean_prob is not None or self.mean_var is not None:
+                logger.warning(
+                    "Both num_residues=%s and a mean_prob/mean_var threshold "
+                    "were set for Squidly; num_residues wins and the "
+                    "thresholds are ignored.",
+                    self.num_residues,
+                )
+            df_pred["Squidly_CR_Position"] = [
+                _select_top_n_from_ensemble(m, self.num_residues)
+                for m in df_pred["mean"]
+            ]
+        elif (self.mean_prob is not None or self.mean_var is not None) \
                 and "mean" in df_pred.columns and "variance" in df_pred.columns:
             mp = self.mean_prob if self.mean_prob is not None else 0.6
             mv = self.mean_var if self.mean_var is not None else 0.225
