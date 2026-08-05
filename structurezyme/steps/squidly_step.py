@@ -300,6 +300,11 @@ class Squidly(Step):
         #
         # This override is a no-op when the user leaves both thresholds at
         # None, so behaviour is backward-compatible with upstream defaults.
+        #
+        # Opt-in top-N selection is an INDEPENDENT feature, not part of the
+        # upstream workaround above: it must be retained when that workaround
+        # is eventually removed. When num_residues is set it wins over the
+        # mean_prob/mean_var thresholds (pure top-N by mean, variance ignored).
         if self.num_residues is not None and "mean" in df_pred.columns:
             if self.mean_prob is not None or self.mean_var is not None:
                 logger.warning(
