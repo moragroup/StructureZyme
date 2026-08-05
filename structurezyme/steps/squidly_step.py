@@ -300,7 +300,19 @@ class Squidly(Step):
         #
         # This override is a no-op when the user leaves both thresholds at
         # None, so behaviour is backward-compatible with upstream defaults.
-        if (self.mean_prob is not None or self.mean_var is not None) \
+        if self.num_residues is not None and "mean" in df_pred.columns:
+            if self.mean_prob is not None or self.mean_var is not None:
+                logger.warning(
+                    "Both num_residues=%s and a mean_prob/mean_var threshold "
+                    "were set for Squidly; num_residues wins and the "
+                    "thresholds are ignored.",
+                    self.num_residues,
+                )
+            df_pred["Squidly_CR_Position"] = [
+                _select_top_n_from_ensemble(m, self.num_residues)
+                for m in df_pred["mean"]
+            ]
+        elif (self.mean_prob is not None or self.mean_var is not None) \
                 and "mean" in df_pred.columns and "variance" in df_pred.columns:
             mp = self.mean_prob if self.mean_prob is not None else 0.6
             mv = self.mean_var if self.mean_var is not None else 0.225
