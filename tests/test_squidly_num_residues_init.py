@@ -14,7 +14,7 @@ def test_positive_int_is_stored():
     assert Squidly(num_residues=3).num_residues == 3
 
 
-@pytest.mark.parametrize("bad", [0, -1, 2.5, "3"])
+@pytest.mark.parametrize("bad", [0, -1, 2.5, "3", True, False])
 def test_invalid_num_residues_raises(bad):
     with pytest.raises(ValueError):
         Squidly(num_residues=bad)
