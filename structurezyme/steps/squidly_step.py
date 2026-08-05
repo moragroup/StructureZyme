@@ -52,6 +52,32 @@ def _select_residues_from_ensemble(mean, variance, mean_prob: float, mean_var: f
     return "|".join(str(int(p)) for p in picks)
 
 
+def _select_top_n_from_ensemble(mean, num_residues: int) -> str:
+    """Select the ``num_residues`` positions with the highest ensemble mean.
+
+    Pure top-N by mean probability, ignoring variance. Ties are broken by
+    lower residue index. If ``num_residues`` exceeds the number of scored
+    positions, all positions are returned. Returns a '|'-joined string of
+    0-indexed positions, ordered ascending by index (matching the threshold
+    path's output format).
+    """
+    import numpy as _np
+    if mean is None:
+        return ""
+    m = _np.asarray(mean, dtype=float)
+    if m.size == 0:
+        return ""
+    n = int(min(num_residues, m.size))
+    if n <= 0:
+        return ""
+    # Sort indices by (descending value, ascending index) so that ties are
+    # broken in favour of the lower index; take the first n of that order,
+    # then present them ascending by index.
+    order = sorted(range(m.size), key=lambda i: (-m[i], i))
+    picks = sorted(order[:n])
+    return "|".join(str(p) for p in picks)
+
+
 def _normalize_residues(value) -> str:
     """Coerce a Squidly residue prediction into a clean pipe-delimited string.
 
