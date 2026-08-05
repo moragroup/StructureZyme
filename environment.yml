@@ -25,7 +25,15 @@ dependencies:
     - freesasa
     - docko
     - chai_lab
-    - squidly  # catalytic-residue prediction CLI; requires GPU for ESM2 inference
+    # Pinned to the fork branch that fixes the upstream CLI dropping
+    # --mean_prob/--mean_var before invoking the inner ensemble worker
+    # (upstream https://github.com/WRiegs/Squidly is unpatched as of 2026-08).
+    # This pin is what makes the local threshold-recompute workaround in
+    # structurezyme/steps/squidly_step.py unnecessary. Pinned to the immutable
+    # commit (not the branch) for reproducible rebuilds; the commit is on branch
+    # fix/forward-mean-prob-mean-var-cli. Repoint at an upstream release once the
+    # fix is merged into WRiegs/Squidly.
+    - squidly @ git+https://github.com/HerrLuca99/Squidly.git@022fa40  # catalytic-residue prediction CLI; requires GPU for ESM2 inference
     - pydantic
     - pyyaml
     - filelock

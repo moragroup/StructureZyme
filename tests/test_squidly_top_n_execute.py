@@ -74,12 +74,15 @@ def test_num_residues_overrides_thresholds_with_warning(monkeypatch, caplog):
     assert any("num_residues" in r.message for r in caplog.records)
 
 
-def test_num_residues_none_uses_threshold_path(monkeypatch):
+def test_num_residues_none_passes_squidly_output_through(monkeypatch):
     from structurezyme.steps.squidly_step import Squidly
 
     _patch(monkeypatch)
-    # No num_residues; permissive thresholds -> threshold path selects by gate.
+    # No num_residues: the step must NOT recompute residues locally. Thresholds
+    # are applied inside squidly (forwarded via --mean-prob/--mean-var to the
+    # pinned, fixed fork), so the step simply consumes squidly's output. Our
+    # fake upstream returns an empty Squidly_Ensemble_Residues, so the step
+    # yields empty positions regardless of the mean/variance arrays.
     step = Squidly(mean_prob=0.03, mean_var=0.1)
     out = step.execute(_make_df())
-    # index 200 has variance 5.0 (> 0.1) so it is excluded; others pass.
-    assert list(out["Squidly_CR_Position"]) == ["10|78|120"]
+    assert list(out["Squidly_CR_Position"]) == [""]
