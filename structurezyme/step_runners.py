@@ -192,6 +192,7 @@ def run_squidly(ctx, spec) -> pd.DataFrame:
         # enzymes without a canonical catalytic triad. None => squidly default.
         mean_prob=opts.get("squidly_mean_prob", None),
         mean_var=opts.get("squidly_mean_var", None),
+        num_residues=opts.get("squidly_num_residues", None),
         num_threads=opts.get("squidly_num_threads") or ctx.config.runtime.num_threads,
     )
     df_squidly = squidly_step.execute(df)
