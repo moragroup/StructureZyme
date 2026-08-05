@@ -128,6 +128,7 @@ class Squidly(Step):
         as_threshold: float | None = None,
         mean_prob: float | None = None,
         mean_var: float | None = None,
+        num_residues: int | None = None,
         single_model: bool = False,
         cpu: bool = False,
         iterative: bool = False,
@@ -146,6 +147,16 @@ class Squidly(Step):
         self.as_threshold = as_threshold
         self.mean_prob = mean_prob
         self.mean_var = mean_var
+        if num_residues is not None:
+            if isinstance(num_residues, bool) or not isinstance(num_residues, int):
+                raise ValueError(
+                    f"num_residues must be a positive integer, got {num_residues!r}"
+                )
+            if num_residues < 1:
+                raise ValueError(
+                    f"num_residues must be >= 1, got {num_residues!r}"
+                )
+        self.num_residues = num_residues
         self.single_model = single_model
         self.cpu = cpu
         self.iterative = iterative
