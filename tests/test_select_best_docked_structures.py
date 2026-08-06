@@ -181,3 +181,28 @@ def test_fused_rank_single_tool_entry_behavior():
     fused = out[out["method"] == "fused_rank"]
     assert len(fused) == 1
     assert fused.iloc[0]["best_structure"] == "E_1_chai"
+
+
+def test_fastrelax_scores_by_entry_extraction():
+    from structurezyme.steps.computeligandRMSD_step import (
+        _fastrelax_scores_by_entry,
+    )
+    df = pd.DataFrame({
+        "Entry": ["A", "A", "B"],
+        "fastrelax_score": [
+            {"chai": {"A_0": -1.0}, "boltz": {}, "vina": {}},
+            {"chai": {"A_0": -1.0}, "boltz": {}, "vina": {}},
+            {"chai": {"B_0": -2.0}, "boltz": {}, "vina": {}},
+        ],
+    })
+    out = _fastrelax_scores_by_entry(df)
+    assert out["A"]["chai"]["A_0"] == -1.0
+    assert out["B"]["chai"]["B_0"] == -2.0
+
+
+def test_fastrelax_scores_by_entry_missing_column():
+    from structurezyme.steps.computeligandRMSD_step import (
+        _fastrelax_scores_by_entry,
+    )
+    df = pd.DataFrame({"Entry": ["A"]})
+    assert _fastrelax_scores_by_entry(df) == {}

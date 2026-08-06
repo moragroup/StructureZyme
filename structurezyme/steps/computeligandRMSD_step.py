@@ -119,6 +119,23 @@ def pose_energy(docked_structure: str, entry_scores):
     return scores.get(key)
 
 
+def _fastrelax_scores_by_entry(df, entry_col: str = "Entry") -> dict:
+    """Map each Entry to its fastrelax_score dict (first non-empty per entry).
+
+    Returns {} if the column is absent. A per-entry score dict looks like
+    {"chai": {pose_key: score}, "boltz": {...}, "vina": {...}}.
+    """
+    if "fastrelax_score" not in df.columns:
+        return {}
+    out: dict = {}
+    for entry, group in df.groupby(entry_col, sort=False):
+        for val in group["fastrelax_score"]:
+            if isinstance(val, dict) and any(val.get(e) for e in ("chai", "boltz", "vina")):
+                out[entry] = val
+                break
+    return out
+
+
 def compute_normalized_ligand_rmsd_stats(rmsd_df: pd.DataFrame):
     """
     Computes per-entry normalized ligand RMSD statistics:
@@ -506,7 +523,10 @@ class LigandRMSD(Step):
 
         # Select the best docked structures based on RMSD
         try:
-            best_docked_structure_df = select_best_docked_structures(rmsd_df)
+            fastrelax_scores = _fastrelax_scores_by_entry(df, self.entry_col)
+            best_docked_structure_df = select_best_docked_structures(
+                rmsd_df, fastrelax_scores
+            )
 
             # Merge metadata into pairwise df (keep pairwise as left table)
             rmsd_df = rmsd_df.merge(df, on='Entry', how='left')
