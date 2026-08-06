@@ -29,6 +29,7 @@ from structurezyme.utils.helpers import (
     closest_ligands_by_element_composition,
     norm_l1_dist,
     atom_composition_fingerprint,
+    _pose_id_from_structure_name,
 )
 
 logger = logging.getLogger(__name__)
@@ -89,6 +90,33 @@ def get_tool_from_structure_name(structure_name: str) -> str:
     if '_' in structure_name:
         return structure_name.split('_')[-1]
     return "UNKNOWN_tool" # Fallback if format doesn't match
+
+
+def pose_energy(docked_structure: str, entry_scores):
+    """Return the fastrelax_score for a docked pose, or None if unavailable.
+
+    `entry_scores` is one entry's per-engine dict:
+    {"chai": {pose_key: score}, "boltz": {...}, "vina": {...}}.
+    chai/boltz keys are `<Entry>_<pose_id>` (via _pose_id_from_structure_name);
+    vina keys are the integer pose index int(stem.split('_')[-2]).
+    """
+    if not entry_scores:
+        return None
+    engine = get_tool_from_structure_name(docked_structure)
+    scores = entry_scores.get(engine)
+    if not scores:
+        return None
+    if engine == "vina":
+        stem = docked_structure
+        if stem.endswith("_relaxed"):
+            stem = stem[: -len("_relaxed")]
+        try:
+            key = int(stem.split("_")[-2])
+        except (ValueError, IndexError):
+            return None
+    else:
+        key = _pose_id_from_structure_name(docked_structure)
+    return scores.get(key)
 
 
 def compute_normalized_ligand_rmsd_stats(rmsd_df: pd.DataFrame):
