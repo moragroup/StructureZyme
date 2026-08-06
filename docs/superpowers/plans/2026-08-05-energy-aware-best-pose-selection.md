@@ -16,8 +16,11 @@
   to the `inter_tool_min_per_tool` geometric winner.
 - Preserve the existing output schema of `select_best_docked_structures`:
   each emitted row is `{Entry, tool, best_structure, avg_ligandRMSD, method}`.
-- `fused_rank` is emitted **exactly once per entry**, always (even with no
-  energy).
+- `fused_rank` is emitted **exactly once per entry that has any selectable pose**
+  (i.e. an entry where the existing geometry methods also emit a row, OR where
+  >=1 pose has energy). Single-tool entries with no inter-tool geometry and <2
+  relaxed poses emit no row — matching the existing geometry methods, which
+  also emit nothing for single-tool entries.
 - Determinism: all tie-breaks end in alphabetical `docked_structure`.
 - `fastrelax_score` per-entry dict shape: `{"chai": {pose_key: score},
   "boltz": {...}, "vina": {...}}`; chai/boltz `pose_key` via
@@ -761,4 +764,3 @@ Not a code task — run by the user on a GPU host after Tasks 1-5 land.
   entry_scores)`, `_fastrelax_scores_by_entry(df, entry_col)`,
   `_has_fused_rank(best_method)`, `_dense_rank(score_by_key)` — names used
   consistently across tasks.
-

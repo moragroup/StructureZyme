@@ -339,6 +339,7 @@ def select_best_docked_structures(
         geom = dict(closest_rmsd_scores)  # may be empty for single-tool entries
 
         # degeneracy: <2 tools, or exactly 2 tools with a single-pose minority
+        # minority-pose count is by structure presence per tool, not by relaxed-pose availability
         pose_counts = sorted(len(v) for v in tool_to_structures.values())
         degenerate_geometry = (
             len(tool_to_structures) < 2

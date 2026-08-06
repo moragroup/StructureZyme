@@ -160,3 +160,24 @@ def test_existing_methods_schema_unchanged():
     assert {"inter_tool_weighted_avg", "inter_tool_min_per_tool"}.issubset(
         set(out["method"])
     )
+
+
+def test_fused_rank_single_tool_entry_behavior():
+    structs = {"E_0_chai": "chai", "E_1_chai": "chai"}
+    rmsd = {frozenset({"E_0_chai", "E_1_chai"}): 0.5}
+    df = _pairwise("E", structs, rmsd)
+
+    out = select_best_docked_structures(df, None)
+    assert out.empty is True
+
+    scores = {
+        "E": {
+            "chai": {"E_0": -5.0, "E_1": -9.0},
+            "boltz": {},
+            "vina": {},
+        }
+    }
+    out = select_best_docked_structures(df, scores)
+    fused = out[out["method"] == "fused_rank"]
+    assert len(fused) == 1
+    assert fused.iloc[0]["best_structure"] == "E_1_chai"
