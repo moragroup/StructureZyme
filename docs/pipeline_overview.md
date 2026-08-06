@@ -110,21 +110,20 @@ Downstream steps that consume a single pose per entry (PLIP, ligand SASA,
 fpocket, PLACER) read the `is_best` / `best_method` columns produced here;
 `PLACER_step._select_one_per_entry` further reduces to exactly one row.
 
-Three selection methods vote independently, each recorded in `best_method`:
+Four selection methods vote independently, each recorded in `best_method`:
 
 1. **`inter_tool_weighted_avg`** — for each pose, average RMSD to every pose
    of every *other* tool, weighted by that tool's pose count. Pick the min.
 2. **`inter_tool_min_per_tool`** — for each pose, take the *closest* pose per
    other tool and average those minima. Pick the min.
 3. **`vina_avg_intra_tool`** — among vina poses only, pick the one with the
-  lowest mean RMSD to the other vina poses. Requires ≥2 vina poses.
-
+   lowest mean RMSD to the other vina poses. Requires ≥2 vina poses.
 4. **`fused_rank`** — energy-aware fusion: rank poses by
    `inter_tool_min_per_tool` geometry and by `fastrelax_score` (lower energy =
    better), combine as summed dense ranks (lowest wins). When geometry is
    degenerate (single-pose-per-tool / <2 tools) energy dominates; when energy
    is unavailable it falls back to the pure-geometry `inter_tool_min_per_tool`
-   pick. Emitted once per entry, always.
+   pick. Emitted once per entry that has any selectable pose.
 
 ### Energy-aware selection (`fused_rank`)
 
