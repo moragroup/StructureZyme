@@ -14,17 +14,27 @@ step and any docking-engine confidence.
 
 This is the documented design gap in `docs/pipeline_overview.md:122-147`.
 
-### Observed failure (fmo-fad-01)
+This is a **general pipeline** change: it applies to any run, any combination
+of docking engines, and any pose counts. It is not tailored to any single
+dataset or validation case.
 
-The `fmo18` run (`tools/fmo18/run_fmo18.yml`, run id `fmo-fad-01`) enables
-`chai` + `boltz` + `vina`, but for residue-less enzymes vina is skipped
-per-row, so most entries reduce to **chai + boltz**. When one tool contributes
-many more poses than the other (e.g. 4 chai vs 1 boltz), both consensus
-methods (`inter_tool_weighted_avg`, `inter_tool_min_per_tool`) deterministically
-favor a chai pose sitting near the chai cluster's own mean — the pose closest
-to the single boltz point wins. This produced `tool="chai"` on **all 18
-entries** in `placer.pkl`, even where the single boltz pose had a
-substantially better (lower) `fastrelax_score` than any chai pose.
+### The general failure class
+
+Whenever the docked poses for an entry are unevenly distributed across tools
+(one tool contributes many more poses than another), both consensus methods
+(`inter_tool_weighted_avg`, `inter_tool_min_per_tool`) are biased toward the
+majority tool: a pose sitting near the majority cluster's own mean, closest to
+the minority tool's few points, wins deterministically. Because the selector
+never consults `fastrelax_score`, a pose with a much better (lower) Rosetta
+interaction energy can lose to a geometrically-central pose with worse energy.
+The selection is deterministic and matches the docstring, but it discards the
+energy signal entirely.
+
+The `fmo-fad-01` run (`tools/fmo18/run_fmo18.yml`) is one concrete instance of
+this class — chai contributes ~4 poses vs boltz's 1, so a chai pose won all 18
+entries in `placer.pkl` even where the single boltz pose had a substantially
+better `fastrelax_score`. It is used below only as a regression fixture; the
+fix is not specific to it.
 
 **Root cause:** two independent issues.
 
@@ -39,14 +49,18 @@ substantially better (lower) `fastrelax_score` than any chai pose.
 
 ## Goals
 
-- Fuse inter-tool geometric consensus with Rosetta `fastrelax_score` to pick
-  the best pose per entry.
-- Fix the fmo-fad-01 behavior: when the single boltz pose has clearly better
-  energy, it should win.
+- A **general-purpose** best-pose selector that fuses inter-tool geometric
+  consensus with Rosetta `fastrelax_score` for every entry, independent of
+  which engines ran or how many poses each contributed.
+- When geometry and energy disagree, a pose with clearly better energy should
+  be able to win — for any tool, in any run.
 - Handle the single-pose-per-tool / degenerate-geometry case explicitly.
 - Degrade gracefully when energy is missing (fastrelax disabled, or only the
   top_k poses per engine relaxed, or per-pose relax failures).
 - No regression when fastrelax is off (behavior collapses to current geometry).
+- Tool-agnostic: no engine name is privileged; the algorithm treats chai,
+  boltz, and vina symmetrically apart from the documented score-direction
+  handling.
 
 ## Non-goals / Future work
 
@@ -147,8 +161,8 @@ Per entry:
      energy only.
 4. **Fusion and degeneracy handling:**
    - **Degenerate geometry** — triggered when (a) fewer than 2 tools are
-     present, OR (b) exactly 2 tools are present and the minority tool has a
-      single pose (the fmo-fad-01 pattern). "Tools present" is derived from the
+     present,      OR (b) exactly 2 tools are present and the minority tool has a
+      single pose. "Tools present" is derived from the
       poses actually present for the entry (`structure_to_tool` values), so a
       vina engine skipped per-row simply does not appear. Geometry cannot
       discriminate:
@@ -202,11 +216,18 @@ PLIP / ligand SASA / fpocket / geometric-filter iterate all rows and ignore
 All unit tests run without GPU/PyRosetta using synthetic DataFrames, matching
 the existing style in `tests/`.
 
-New `tests/test_select_best_docked_structures.py`:
+New `tests/test_select_best_docked_structures.py`. Tests describe **general**
+behavior; tool names in fixtures are incidental and cases are parametrized
+over engine combinations where practical:
 
-1. **fmo-fad-01 regression:** 4 chai poses + 1 boltz pose; boltz has
-   substantially better (lower) energy. Assert the `fused_rank` winner is the
-   boltz pose, not a chai pose.
+1. **Energy overrides biased geometric consensus (general):** an uneven
+   pose distribution (majority tool with several poses, minority tool with
+   one) where the minority pose has clearly better energy — assert the
+   `fused_rank` winner is the better-energy minority pose, not the
+   geometrically-central majority pose. Parametrize the majority/minority
+   engine assignment so the behavior is not tied to a specific engine. The
+   `fmo-fad-01` shape (chai majority, boltz minority) is one parametrization,
+   serving as the documented regression.
 2. **fastrelax-off fallback:** no energy passed. Assert `fused_rank` winner ==
    `inter_tool_min_per_tool` winner (pure geometry, no regression), and the
    three geometric method rows are unchanged.
@@ -215,8 +236,9 @@ New `tests/test_select_best_docked_structures.py`:
 4. **Single-pose-per-tool / degenerate geometry:** 2 tools with the minority
    tool contributing a single pose. With energy present, energy dominates;
    with no energy, deterministic geometric pick.
-5. **vina direction:** vina energies (lower affinity = better) rank correctly
-   alongside chai/boltz.
+5. **Score-direction handling (all engines):** verify ascending raw
+   `fastrelax_score` = better ranks correctly for chai, boltz, and vina in the
+   same entry, so no engine is mis-ranked.
 6. **Schema stability:** the three existing method rows keep the schema
    `{Entry, tool, best_structure, avg_ligandRMSD, method}`.
 
@@ -227,10 +249,14 @@ Extend `tests/test_placer_step.py`:
 8. When `fused_rank` is absent, existing `_method_count` behavior is unchanged
    (existing tests stay green).
 
-**Final integration validation (on GPU):** run the `fmo18` pipeline with
-`fastrelax` enabled and confirm `placer.pkl` no longer shows `tool="chai"` on
-all 18 entries — specifically that entries where the boltz pose has a better
-`fastrelax_score` now select boltz.
+**Final integration validation (on GPU):** run a full pipeline with
+`fastrelax` enabled and confirm that best-pose selection now reflects energy:
+for entries where a pose has a clearly better `fastrelax_score` than the
+geometric consensus pick, that better-energy pose is selected. The `fmo18` run
+serves as a convenient dataset for this check (previously every entry selected
+the geometric-consensus tool regardless of energy), but the acceptance
+criterion is the general energy-aware behavior, not any dataset-specific
+count.
 
 ## Files touched
 
