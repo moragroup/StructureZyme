@@ -124,6 +124,44 @@ def test_fused_rank_partial_energy_does_not_crash():
     assert len(fused) == 1  # never crashes, always emits
 
 
+def test_fused_rank_normal_partial_energy_winner():
+    # 2 chai + 2 boltz (normal, non-degenerate: 2 tools, minority tool has
+    # 2 poses). Geometry (inter_tool_min_per_tool) ties E_0_chai, E_1_chai,
+    # and E_0_boltz at 1.0 (each has a close cross-tool neighbor); E_1_boltz
+    # is worse at 4.0. Only E_0_chai and E_0_boltz have energy; E_1_chai and
+    # E_1_boltz have none and must get the worst energy rank.
+    #
+    # geom:   E_0_chai=1.0, E_1_chai=1.0, E_0_boltz=1.0, E_1_boltz=4.0
+    # geom_rank:   E_0_chai=1, E_1_chai=1, E_0_boltz=1, E_1_boltz=2
+    # energy: E_0_chai=-30.0 (best), E_0_boltz=-25.0; E_1_chai/E_1_boltz none
+    # energy_rank: E_0_chai=1, E_0_boltz=2, worst(=3) for E_1_chai/E_1_boltz
+    # summed: E_0_chai=1+1=2, E_0_boltz=1+2=3, E_1_chai=1+3=4, E_1_boltz=2+3=5
+    # => E_0_chai is the unique summed-rank minimum: it has both the best
+    #    geometry tier (tied for 1st) and the best energy, so no other pose
+    #    can beat it. E_1_chai shares the best geometry but lacks energy
+    #    (worst-rank penalty) and loses to E_0_chai.
+    structs = {
+        "E_0_chai": "chai", "E_1_chai": "chai",
+        "E_0_boltz": "boltz", "E_1_boltz": "boltz",
+    }
+    rmsd = {
+        frozenset({"E_0_chai", "E_1_chai"}): 0.5,
+        frozenset({"E_0_boltz", "E_1_boltz"}): 0.5,
+        frozenset({"E_0_chai", "E_0_boltz"}): 1.0,
+        frozenset({"E_0_chai", "E_1_boltz"}): 4.0,
+        frozenset({"E_1_chai", "E_0_boltz"}): 1.0,
+        frozenset({"E_1_chai", "E_1_boltz"}): 4.0,
+    }
+    df = _pairwise("E", structs, rmsd)
+    # only E_0_chai and E_0_boltz have relaxed energy; E_1_chai/E_1_boltz none
+    scores = {"E": {"chai": {"E_0": -30.0}, "boltz": {"E_0": -25.0}, "vina": {}}}
+    out = select_best_docked_structures(df, scores)
+    fused = out[out["method"] == "fused_rank"]
+    assert len(fused) == 1
+    assert fused.iloc[0]["best_structure"] == "E_0_chai"
+    assert fused.iloc[0]["tool"] == "chai"
+
+
 def test_fused_rank_vina_direction():
     # chai/boltz/vina in one entry; vina energy lower = better, same as others.
     structs = {"E_0_chai": "chai", "E_0_boltz": "boltz",

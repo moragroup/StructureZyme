@@ -216,7 +216,7 @@ def select_best_docked_structures(
     fastrelax_score_by_entry: dict | None = None,
 ) -> pd.DataFrame:
     """
-    Selects the best overall docked structure per Entry using two methods:
+    Selects the best overall docked structure per Entry using four methods:
     
     1. inter_tool_weighted_avg: Weighted average RMSD to all structures from other tools,
        weighted by number of structures each tool contributes.
