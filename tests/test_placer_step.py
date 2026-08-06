@@ -223,6 +223,21 @@ def test_select_one_per_entry_fused_rank_absent_uses_method_count():
     assert result.iloc[0]["docked_structure"] == "Q1_b_chai"
 
 
+def test_select_one_per_entry_fused_rank_wins_despite_lower_method_count():
+    df = pd.DataFrame({
+        "Entry": ["Q1", "Q1"],
+        "docked_structure": ["Z_0_chai", "A_0_boltz"],
+        "is_best": [True, True],
+        "best_method": [
+            "inter_tool_min_per_tool,inter_tool_weighted_avg,vina_avg_intra_tool",
+            "inter_tool_min_per_tool,fused_rank",
+        ],
+    })
+    result = _select_one_per_entry(df, entry_col="Entry")
+    assert len(result) == 1
+    assert result.iloc[0]["docked_structure"] == "A_0_boltz"
+
+
 # ---------------------------------------------------------------------------
 # Task 7.1: _build_pdb_path
 # ---------------------------------------------------------------------------

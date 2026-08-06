@@ -206,3 +206,17 @@ def test_fastrelax_scores_by_entry_missing_column():
     )
     df = pd.DataFrame({"Entry": ["A"]})
     assert _fastrelax_scores_by_entry(df) == {}
+
+
+def test_fastrelax_scores_by_entry_skips_all_empty():
+    from structurezyme.steps.computeligandRMSD_step import (
+        _fastrelax_scores_by_entry,
+    )
+    df = pd.DataFrame({
+        "Entry": ["A", "A"],
+        "fastrelax_score": [
+            {"chai": {}, "boltz": {}, "vina": {}},
+            {"chai": {"A_0": -3.0}, "boltz": {}, "vina": {}},
+        ],
+    })
+    assert _fastrelax_scores_by_entry(df)["A"]["chai"]["A_0"] == -3.0

@@ -117,34 +117,40 @@ Three selection methods vote independently, each recorded in `best_method`:
 2. **`inter_tool_min_per_tool`** — for each pose, take the *closest* pose per
    other tool and average those minima. Pick the min.
 3. **`vina_avg_intra_tool`** — among vina poses only, pick the one with the
-   lowest mean RMSD to the other vina poses. Requires ≥2 vina poses.
+  lowest mean RMSD to the other vina poses. Requires ≥2 vina poses.
 
-### Known design gap: selector ignores `fastrelax_score`
+4. **`fused_rank`** — energy-aware fusion: rank poses by
+   `inter_tool_min_per_tool` geometry and by `fastrelax_score` (lower energy =
+   better), combine as summed dense ranks (lowest wins). When geometry is
+   degenerate (single-pose-per-tool / <2 tools) energy dominates; when energy
+   is unavailable it falls back to the pure-geometry `inter_tool_min_per_tool`
+   pick. Emitted once per entry, always.
 
-The current selector uses **only inter-tool geometric consensus**. It does
-not consult `fastrelax_score` (the Rosetta interaction energy computed by
-the `fastrelax` step) or docking-engine confidence metrics. Two consequences
-observed on real runs:
+### Energy-aware selection (`fused_rank`)
 
-- When a run enables `chai` + `boltz` but not `vina`, both consensus methods
-  reduce to "closest to the poses of the other tool." If one tool contributes
-  many more poses than the other (e.g. 4 chai poses vs 1 boltz pose), the
-  majority tool's poses cluster near their own mean and the pose closest to
-  the minority tool's single point wins both methods — deterministically.
-- A pose with a much better `fastrelax_score` can lose to a
-  geometrically-central pose with a worse energy. On `fmo-fad-01` this
-  produced `tool="chai"` on all 18 entries in `placer.pkl`, even for entries
-  where the single boltz pose had a substantially lower (better)
-  `fastrelax_score` than any chai pose.
+The selector now fuses inter-tool geometric consensus with the Rosetta
+`fastrelax_score` interaction energy via the `fused_rank` method. Energy is
+passed per-Entry from `LigandRMSD.__execute` into
+`select_best_docked_structures`, and PLACER's `_select_one_per_entry` treats a
+`fused_rank` pick as authoritative (falling back to the geometric
+`_method_count` vote only when `fused_rank` is absent, e.g. fastrelax
+disabled).
 
-**Status**: not a bug — the behavior is deterministic and matches the
-docstring. But the selector should be redesigned to combine geometric
-consensus with `fastrelax_score` (and possibly engine confidence) rather
-than relying on consensus alone. Options range from adding a fourth
-`fastrelax_min` method (small change; gives energy a vote via
-`_method_count`) to a rank-fusion / weighted-score hybrid (larger change;
-requires design discussion). Any redesign must handle the single-pose-per-
-tool case explicitly, since intra-tool consensus is undefined there.
+Behavior:
+
+- **Normal case** (>=2 tools, minority tool has >=2 poses, >=2 poses relaxed):
+  `fused_score = geom_rank + energy_rank`; poses without energy get the worst
+  energy rank so geometry still orders them.
+- **Degenerate geometry** (<2 tools, or 2 tools with a single-pose minority):
+  energy dominates, geometry breaks ties.
+- **No energy** (fastrelax off / all relax failed): pure geometry
+  (`inter_tool_min_per_tool`), identical to the previous behavior.
+
+Score direction: `fastrelax_score` is ranked ascending (lower/more-negative
+REU = better) for all engines.
+
+**Future work:** 3-tool outlier trimming (best-2-of-3-tools consensus) is not
+yet implemented; add only if a real 3-tool run shows geometry distortion.
 
 ## PLACER step
 
