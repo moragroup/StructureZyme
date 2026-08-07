@@ -29,6 +29,7 @@ from structurezyme.utils.helpers import (
     closest_ligands_by_element_composition,
     norm_l1_dist,
     atom_composition_fingerprint,
+    _pose_id_from_structure_name,
 )
 
 logger = logging.getLogger(__name__)
@@ -89,6 +90,50 @@ def get_tool_from_structure_name(structure_name: str) -> str:
     if '_' in structure_name:
         return structure_name.split('_')[-1]
     return "UNKNOWN_tool" # Fallback if format doesn't match
+
+
+def pose_energy(docked_structure: str, entry_scores):
+    """Return the fastrelax_score for a docked pose, or None if unavailable.
+
+    `entry_scores` is one entry's per-engine dict:
+    {"chai": {pose_key: score}, "boltz": {...}, "vina": {...}}.
+    chai/boltz keys are `<Entry>_<pose_id>` (via _pose_id_from_structure_name);
+    vina keys are the integer pose index int(stem.split('_')[-2]).
+    """
+    if not entry_scores:
+        return None
+    engine = get_tool_from_structure_name(docked_structure)
+    scores = entry_scores.get(engine)
+    if not scores:
+        return None
+    if engine == "vina":
+        stem = docked_structure
+        if stem.endswith("_relaxed"):
+            stem = stem[: -len("_relaxed")]
+        try:
+            key = int(stem.split("_")[-2])
+        except (ValueError, IndexError):
+            return None
+    else:
+        key = _pose_id_from_structure_name(docked_structure)
+    return scores.get(key)
+
+
+def _fastrelax_scores_by_entry(df, entry_col: str = "Entry") -> dict:
+    """Map each Entry to its fastrelax_score dict (first non-empty per entry).
+
+    Returns {} if the column is absent. A per-entry score dict looks like
+    {"chai": {pose_key: score}, "boltz": {...}, "vina": {...}}.
+    """
+    if "fastrelax_score" not in df.columns:
+        return {}
+    out: dict = {}
+    for entry, group in df.groupby(entry_col, sort=False):
+        for val in group["fastrelax_score"]:
+            if isinstance(val, dict) and any(val.get(e) for e in ("chai", "boltz", "vina")):
+                out[entry] = val
+                break
+    return out
 
 
 def compute_normalized_ligand_rmsd_stats(rmsd_df: pd.DataFrame):
@@ -156,9 +201,22 @@ def compute_normalized_ligand_rmsd_stats(rmsd_df: pd.DataFrame):
     return enriched_df
 
 
-def select_best_docked_structures(rmsd_df: pd.DataFrame) -> pd.DataFrame:
+def _dense_rank(score_by_key: dict) -> dict:
+    """Ascending dense rank (1 = smallest). Ties share a rank.
+
+    score_by_key: {key: numeric}. Returns {key: rank_int}.
     """
-    Selects the best overall docked structure per Entry using two methods:
+    order = sorted(set(score_by_key.values()))
+    rank_of_value = {v: i + 1 for i, v in enumerate(order)}
+    return {k: rank_of_value[v] for k, v in score_by_key.items()}
+
+
+def select_best_docked_structures(
+    rmsd_df: pd.DataFrame,
+    fastrelax_score_by_entry: dict | None = None,
+) -> pd.DataFrame:
+    """
+    Selects the best overall docked structure per Entry using four methods:
     
     1. inter_tool_weighted_avg: Weighted average RMSD to all structures from other tools,
        weighted by number of structures each tool contributes.
@@ -168,7 +226,11 @@ def select_best_docked_structures(rmsd_df: pd.DataFrame) -> pd.DataFrame:
 
     3. vina_avg_intra_tool: Best structure among all vina generated structures based on
        lowest average RMSD to other Vina poses.
-       
+
+    4. fused_rank: energy-aware fusion of inter_tool_min_per_tool geometry with
+       fastrelax_score (lower energy = better). Degrades to pure geometry when
+       energy is unavailable.
+
     Returns a DataFrame with one row per method per Entry.
     """
     best_structures = []
@@ -277,6 +339,68 @@ def select_best_docked_structures(rmsd_df: pd.DataFrame) -> pd.DataFrame:
                     'avg_ligandRMSD': avg_rmsd_vina[best_vina],
                     'method': 'vina_avg_intra_tool'
                 })
+
+        # ----- Method 4: energy-aware rank fusion (fused_rank) -----
+        entry_scores = (
+            (fastrelax_score_by_entry or {}).get(entry)
+            if fastrelax_score_by_entry else None
+        )
+
+        # energy per structure (None where unrelaxed / unavailable)
+        energy_by_s = {
+            s: pose_energy(s, entry_scores) for s in rmsd_matrix.index
+        }
+        have_energy = {s: e for s, e in energy_by_s.items() if e is not None}
+
+        # geometry score = inter_tool_min_per_tool value (lower = better)
+        geom = dict(closest_rmsd_scores)  # may be empty for single-tool entries
+
+        # degeneracy: <2 tools, or exactly 2 tools with a single-pose minority
+        # minority-pose count is by structure presence per tool, not by relaxed-pose availability
+        pose_counts = sorted(len(v) for v in tool_to_structures.values())
+        degenerate_geometry = (
+            len(tool_to_structures) < 2
+            or (len(tool_to_structures) == 2 and pose_counts[0] == 1)
+        )
+
+        fused_best = None
+        if len(have_energy) == 0:
+            # No energy anywhere -> pure geometry (min_per_tool winner).
+            if geom:
+                fused_best = min(geom, key=geom.get)
+        elif degenerate_geometry:
+            # Geometry can't discriminate -> energy dominates, geometry tiebreak.
+            fused_best = min(
+                have_energy,
+                key=lambda s: (have_energy[s], geom.get(s, float("inf")), s),
+            )
+        elif len(have_energy) >= 2 and geom:
+            # Normal fusion: summed dense ranks; missing energy = worst rank.
+            geom_rank = _dense_rank(geom)
+            energy_rank = _dense_rank(have_energy)
+            worst = (max(energy_rank.values()) if energy_rank else 0) + 1
+            candidates = [s for s in geom_rank]  # all structures with geometry
+            fused_best = min(
+                candidates,
+                key=lambda s: (
+                    geom_rank[s] + energy_rank.get(s, worst),
+                    energy_by_s[s] if energy_by_s[s] is not None else float("inf"),
+                    s,
+                ),
+            )
+        else:
+            # 0 or 1 relaxed poses but geometry usable -> pure geometry.
+            if geom:
+                fused_best = min(geom, key=geom.get)
+
+        if fused_best is not None:
+            best_structures.append({
+                'Entry': entry,
+                'tool': structure_to_tool[fused_best],
+                'best_structure': fused_best,
+                'avg_ligandRMSD': geom.get(fused_best, float('nan')),
+                'method': 'fused_rank',
+            })
 
     return pd.DataFrame(best_structures)
 
@@ -399,7 +523,10 @@ class LigandRMSD(Step):
 
         # Select the best docked structures based on RMSD
         try:
-            best_docked_structure_df = select_best_docked_structures(rmsd_df)
+            fastrelax_scores = _fastrelax_scores_by_entry(df, self.entry_col)
+            best_docked_structure_df = select_best_docked_structures(
+                rmsd_df, fastrelax_scores
+            )
 
             # Merge metadata into pairwise df (keep pairwise as left table)
             rmsd_df = rmsd_df.merge(df, on='Entry', how='left')

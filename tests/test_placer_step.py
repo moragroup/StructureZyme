@@ -190,6 +190,54 @@ def test_select_one_per_entry_fallback_when_no_is_best():
     assert result.iloc[0]["docked_structure"] == "Q1_0_chai"
 
 
+def test_select_one_per_entry_fused_rank_wins_over_method_count():
+    # Pose A chosen by 3 geometric methods; pose B chosen by fused_rank only.
+    # fused_rank must win despite lower method count.
+    df = pd.DataFrame({
+        "Entry": ["Q1", "Q1"],
+        "docked_structure": ["Q1_0_chai", "Q1_0_boltz"],
+        "is_best": [True, True],
+        "best_method": [
+            "inter_tool_min_per_tool,inter_tool_weighted_avg,vina_avg_intra_tool",
+            "fused_rank",
+        ],
+    })
+    result = _select_one_per_entry(df, entry_col="Entry")
+    assert len(result) == 1
+    assert result.iloc[0]["docked_structure"] == "Q1_0_boltz"
+
+
+def test_select_one_per_entry_fused_rank_absent_uses_method_count():
+    # No fused_rank token -> existing _method_count behavior (highest wins).
+    df = pd.DataFrame({
+        "Entry": ["Q1", "Q1"],
+        "docked_structure": ["Q1_a_chai", "Q1_b_chai"],
+        "is_best": [True, True],
+        "best_method": [
+            "inter_tool_min_per_tool",
+            "inter_tool_min_per_tool,inter_tool_weighted_avg",
+        ],
+    })
+    result = _select_one_per_entry(df, entry_col="Entry")
+    assert len(result) == 1
+    assert result.iloc[0]["docked_structure"] == "Q1_b_chai"
+
+
+def test_select_one_per_entry_fused_rank_wins_despite_lower_method_count():
+    df = pd.DataFrame({
+        "Entry": ["Q1", "Q1"],
+        "docked_structure": ["Z_0_chai", "A_0_boltz"],
+        "is_best": [True, True],
+        "best_method": [
+            "inter_tool_min_per_tool,inter_tool_weighted_avg,vina_avg_intra_tool",
+            "inter_tool_min_per_tool,fused_rank",
+        ],
+    })
+    result = _select_one_per_entry(df, entry_col="Entry")
+    assert len(result) == 1
+    assert result.iloc[0]["docked_structure"] == "A_0_boltz"
+
+
 # ---------------------------------------------------------------------------
 # Task 7.1: _build_pdb_path
 # ---------------------------------------------------------------------------

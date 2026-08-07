@@ -38,6 +38,13 @@ def _method_count(best_method) -> int:
     return len(str(best_method).split(","))
 
 
+def _has_fused_rank(best_method) -> bool:
+    """True if 'fused_rank' is one of the comma-separated tokens."""
+    if pd.isna(best_method) or best_method == "":
+        return False
+    return "fused_rank" in str(best_method).split(",")
+
+
 def _select_one_per_entry(df: pd.DataFrame, entry_col: str = "Entry") -> pd.DataFrame:
     """Reduce a per-(entry, docked_structure) DataFrame to exactly one row per entry.
 
@@ -56,6 +63,11 @@ def _select_one_per_entry(df: pd.DataFrame, entry_col: str = "Entry") -> pd.Data
         if pool.empty:
             pool = group
         pool = pool.copy()
+        # fused_rank is authoritative: if any pose in the pool was chosen by
+        # the energy-aware fusion, restrict to those before other tie-breaks.
+        fused = pool[pool["best_method"].apply(_has_fused_rank)]
+        if not fused.empty:
+            pool = fused
         pool["_method_count"] = pool["best_method"].apply(_method_count)
         max_count = pool["_method_count"].max()
         pool = pool[pool["_method_count"] == max_count]
