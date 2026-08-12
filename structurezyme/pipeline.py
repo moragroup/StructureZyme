@@ -561,10 +561,24 @@ class Pipeline:
             run_id=datetime.now().strftime("%Y%m%d-%H%M%S-%f"),
             num_threads=num_threads,
         )
+
+        # Build the run layout up front so we can point PathsConfig.input_csv
+        # at the checkpoint pickle this adapter seeds directly below.
+        # RunConfig.validate_paths() (invoked by Runner.__init__) requires
+        # input_csv to be non-empty; the adapter never loads a CSV itself
+        # (it writes the seed pickle directly and Runner._seed_and_validate
+        # short-circuits CSV loading whenever that pickle already exists), so
+        # this path is only ever consulted for the "is it set" check, not
+        # actually read from disk as a CSV.
+        self.layout = RunLayout(run_dir(str(base_output_dir),
+                                        runtime.user,
+                                        runtime.run_id))
+
         self.config = RunConfig(
             paths=PathsConfig(
                 output_root=str(base_output_dir),
                 boltz_cache_dir=str(boltz_cache_dir),
+                input_csv=str(self.layout.checkpoint_path("_input")),
                 squidly_weights_dir=str(squidly_dir) or None,
                 placer_env_path=placer_env_path,
             ),
@@ -572,11 +586,8 @@ class Pipeline:
             steps=steps,
         )
 
-        # Build the run layout and seed the input DataFrame so the first step
-        # (squidly) can read it from checkpoints/_input.pkl.
-        self.layout = RunLayout(run_dir(self.config.paths.output_root,
-                                        self.config.runtime.user,
-                                        self.config.runtime.run_id))
+        # Seed the input DataFrame so the first step (squidly) can read it
+        # from checkpoints/_input.pkl.
         self.layout.create()
         self.df.to_pickle(self.layout.checkpoint_path("_input"))
 

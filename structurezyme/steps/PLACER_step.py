@@ -126,6 +126,15 @@ def _parse_placer_csv(csv_path: Path | str) -> dict[str, float | None]:
         return empty
 
 
+def _path_exists(p: Path) -> bool:
+    """True if the path exists; treat un-statable paths (PermissionError on
+    shared filesystems) as 'does not exist' rather than propagating OSError."""
+    try:
+        return p.exists()
+    except OSError:
+        return False
+
+
 def _count_ligands(pdb_path: Path | str, ligand_resname: str) -> int:
     """Count distinct ligand instances (unique chain + resseq) in a PDB file.
 
@@ -180,7 +189,7 @@ class PLACER(Step):
         self.num_threads = num_threads
 
         script = Path(placer_script_path)
-        if not script.exists():
+        if not _path_exists(script):
             raise FileNotFoundError(
                 f"PLACER script not found at {placer_script_path}. "
                 "Set placer_script_path explicitly or install PLACER."
@@ -188,7 +197,7 @@ class PLACER(Step):
         self.placer_script_path = script
 
         env_python = Path(placer_env_path) / "bin" / "python"
-        if not env_python.exists():
+        if not _path_exists(env_python):
             raise FileNotFoundError(
                 f"PLACER env python not found at {env_python}. "
                 "Set placer_env_path explicitly or install PLACER."
