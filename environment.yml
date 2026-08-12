@@ -17,6 +17,7 @@ dependencies:
   - fpocket
   - pip
   - plip
+  - pytest  # test runner (needed to run the unit suite in tests/)
   - pip:
     # NOTE: after creating this env, install the package itself with: pip install -e .
     - enzymetk==0.1.0
