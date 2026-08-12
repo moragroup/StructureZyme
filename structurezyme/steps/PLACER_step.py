@@ -12,12 +12,11 @@ This module currently provides:
   file. Promoted from a method to a module-level function so it can be
   unit-tested standalone.
 
-- `class PLACER(Step)`: the step class scaffold. Only `__init__` is
-  implemented here — it stores its parameters and validates that
-  `placer_script_path` points at an existing file. The actual PLACER
-  subprocess invocation and `execute` method are implemented in a later
-  task; the class inherits `Step.execute`'s identity pass-through for now
-  (same pattern as `FastRelax` at commit 00f530f).
+- `class PLACER(Step)`: the step class. `__init__` stores its parameters and
+  validates that `placer_script_path`/`placer_env_path` point at an existing
+  install; `execute` runs PLACER once per selected entry (via
+  `_select_one_per_entry`), shells out to `run_PLACER.py`, and merges the
+  top-row scores back into the DataFrame.
 """
 from __future__ import annotations
 
@@ -151,11 +150,11 @@ def _count_ligands(pdb_path: Path | str, ligand_resname: str) -> int:
 class PLACER(Step):
     """PLACER step: predict ligand binding poses via the PLACER binary.
 
-    Scaffold only — the `execute` method (which shells out to
-    `run_PLACER.py` per entry, then counts predicted ligand instances in
-    each output PDB via `_count_ligands`) is implemented in a later task.
-    For now, the class inherits `Step.execute`'s identity pass-through,
-    matching the `FastRelax` pattern at commit 00f530f.
+    `execute` reduces the input to one row per entry
+    (`_select_one_per_entry`), shells out to `run_PLACER.py` for each entry's
+    prepared PDB (counting predicted ligand instances via `_count_ligands` to
+    decide `--predict_multi`), parses the top-row scores from the PLACER output
+    CSV, and merges the eight `placer_*` columns back into the DataFrame.
     """
 
     def __init__(
