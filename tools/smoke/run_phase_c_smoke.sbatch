@@ -10,8 +10,9 @@
 
 set -euo pipefail
 
-# Activate filterzyme env (env path discovered on this cluster)
-export PATH=/mnt/storage01/home/lherrmann/envs/filterzyme/bin:$PATH
+STRUCTUREZYME_ENV="${STRUCTUREZYME_ENV:-/mnt/labs/data/mora/envs/structurezyme}"
+source "$(conda info --base)/etc/profile.d/conda.sh"
+conda activate "$STRUCTUREZYME_ENV"
 
 # Resolve repo root. Normal usage is `sbatch tools/smoke/run_phase_c_smoke.sbatch`
 # from the repo root, so SLURM_SUBMIT_DIR == repo root. Prefer the Slurm

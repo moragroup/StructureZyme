@@ -7,14 +7,12 @@
 
 set -euo pipefail
 
-# Absolute paths so the job does not depend on the submit directory or PATH.
-ENV_PY="$HOME/envs/filterzyme/bin/python"
-WORKTREE="$HOME/structurezyme/.worktrees/energy-aware-selection"
-
-# Put the env's bin on PATH so pipeline steps that shell out to external
-# binaries (e.g. fpocket) can find them. The Python code is still invoked
-# by absolute path below; this is only for subprocess lookups.
-export PATH="$HOME/envs/filterzyme/bin:$PATH"
+STRUCTUREZYME_ENV="${STRUCTUREZYME_ENV:-/mnt/labs/data/mora/envs/structurezyme}"
+source "$(conda info --base)/etc/profile.d/conda.sh"
+conda activate "$STRUCTUREZYME_ENV"
+ENV_PY="$(command -v python)"
+# Repo root: override with STRUCTUREZYME_REPO if not submitting from the checkout.
+WORKTREE="${STRUCTUREZYME_REPO:-$(cd "$(dirname "$0")/../.." && pwd)}"
 
 cd "$WORKTREE"
 

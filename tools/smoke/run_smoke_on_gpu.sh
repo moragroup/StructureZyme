@@ -1,7 +1,9 @@
 #!/bin/bash
 set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-export PATH=/mnt/storage01/home/lherrmann/envs/filterzyme/bin:$PATH
+STRUCTUREZYME_ENV="${STRUCTUREZYME_ENV:-/mnt/labs/data/mora/envs/structurezyme}"
+source "$(conda info --base)/etc/profile.d/conda.sh"
+conda activate "$STRUCTUREZYME_ENV"
 cd /mnt/storage01/home/lherrmann/StructureZyme
 mkdir -p "$HOME/boltz_cache"
 echo "=== host=$(hostname)  python=$(which python)  squidly=$(which squidly) ==="

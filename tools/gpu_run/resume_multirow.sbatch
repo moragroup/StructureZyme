@@ -24,7 +24,9 @@
 
 set -euo pipefail
 
-export PATH=/mnt/storage01/home/lherrmann/envs/filterzyme/bin:$PATH
+STRUCTUREZYME_ENV="${STRUCTUREZYME_ENV:-/mnt/labs/data/mora/envs/structurezyme}"
+source "$(conda info --base)/etc/profile.d/conda.sh"
+conda activate "$STRUCTUREZYME_ENV"
 
 if [ -n "${SLURM_SUBMIT_DIR:-}" ]; then
     REPO_ROOT="$SLURM_SUBMIT_DIR"

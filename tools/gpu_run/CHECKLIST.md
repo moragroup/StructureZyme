@@ -19,7 +19,7 @@ back the manifest + log tail for F2 verification.
 - [x] Full test suite: 118 passed, 3 skipped.
 
 ## Before you submit
-- [ ] Env `/mnt/storage01/home/lherrmann/envs/filterzyme` has StructureZyme
+- [ ] Env `structurezyme` (default `/mnt/labs/data/mora/envs/structurezyme`, override with `$STRUCTUREZYME_ENV`) has StructureZyme
       installed (`pip install -e .` from the repo root so the `structurezyme`
       console entry point exists — verify: `which structurezyme`).
 - [ ] `squidly` on PATH (`which squidly`).
