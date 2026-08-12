@@ -4,7 +4,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 STRUCTUREZYME_ENV="${STRUCTUREZYME_ENV:-/mnt/labs/data/mora/envs/structurezyme}"
 source "$(conda info --base)/etc/profile.d/conda.sh"
 conda activate "$STRUCTUREZYME_ENV"
-cd /mnt/storage01/home/lherrmann/StructureZyme
+REPO_ROOT="${STRUCTUREZYME_REPO:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
+cd "$REPO_ROOT"
 mkdir -p "$HOME/boltz_cache"
 echo "=== host=$(hostname)  python=$(which python)  squidly=$(which squidly) ==="
 nvidia-smi | head -12 || true
