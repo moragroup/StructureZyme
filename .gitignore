@@ -29,6 +29,9 @@ __pycache__/
 *filterzyme_output/
 *filterzyme_output_yang_benchmark/
 *filterzyme_output_test/
+*structurezyme_output/
+*structurezyme_output_yang_benchmark/
+*structurezyme_output_test/
 pipeline_output_phaseC_vina/
 pipeline_output_phaseC_*/
 *fasta-36.3.8i/

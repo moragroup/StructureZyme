@@ -13,7 +13,7 @@ from structurezyme.pipeline import GeometricFilters
 
 df = pd.read_pickle('MDH_CuSOD_combined_input_df.pkl')
 
-base_output_dir = "filterzyme_output_yang_benchmark"
+base_output_dir = "structurezyme_output_yang_benchmark"
 
 if __name__ == "__main__":
 
@@ -60,4 +60,3 @@ if __name__ == "__main__":
     #df = pd.read_pickle('/nvme2/helen/masterthesis/3_manuscript/benchmark_martinez/geometricfiltering/ligandSASA.pkl')
     #filtering._plip_interactions(df)
 """
-

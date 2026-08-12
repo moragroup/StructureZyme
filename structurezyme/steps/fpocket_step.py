@@ -17,7 +17,7 @@ from structurezyme.steps.step import Step
 from structurezyme.utils.helpers import get_hetatm_chain_ids, extract_chain_as_rdkit_mol, closest_ligands_by_element_composition
 
 
-# How to run fpocket in terminal: fpocket -f /home/helen/cec_degrader/generalize/alphafold_structures/A1RRK1_structure.pdb
+# How to run fpocket in terminal: fpocket -f <fpocket_output_dir>
 # -r string: (None) This parameter allows you to run fpocket in a restricted mode. Let's suppose you have a very shallow or large pocket with a ligand inside and the automatic pocket prediction always splits up you pocket or you have only a part of the pocket found. Specifying your ligand residue with -r allows you to detect and characterize you ligand binding site explicitly. 
 # For instance for `1UYD.pdb` you can specify `-r 1224:PU8:A` (residue number of the ligand: residue name of the ligand: chain of the ligand)
 

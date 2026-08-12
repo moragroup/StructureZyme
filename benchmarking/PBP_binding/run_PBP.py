@@ -23,7 +23,7 @@ df['substrate_moiety'] = 'C2=CN=CC=C2'
 df = df.head(1)
 # df.to_csv('PBP_nicotine_only.csv', index=False)
 
-base_output_dir = "filterzyme_output"
+base_output_dir = "structurezyme_output"
 
 if __name__ == "__main__":
 
@@ -78,4 +78,3 @@ if __name__ == "__main__":
     #df = pd.read_pickle('/nvme2/helen/masterthesis/3_manuscript/benchmark_martinez/geometricfiltering/ligandSASA.pkl')
     #filtering._plip_interactions(df)
 """
-
