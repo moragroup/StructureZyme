@@ -35,6 +35,11 @@ _No active workarounds at present._
   `tests/test_squidly_threshold_wiring.py` still verifies the thresholds are
   forwarded from run config into `Squidly()` and onto the CLI.
 
-- **Follow-up**: once the fix is merged into the real upstream
-  `WRiegs/Squidly` and released, repoint the `squidly` pin in
-  `environment.yml` from the fork branch to that upstream release.
+- **Follow-up**: `environment.yml` currently pins the fork at
+  `github.com/HerrLuca99/Squidly` (commit `022fa40`) because the intended org
+  fork `github.com/moragroup/Squidly` does not exist yet (see Task 8). Once
+  the org fork is created (same commit `022fa40`), repoint the `squidly` pin
+  in `environment.yml` to `github.com/moragroup/Squidly` — a one-line change
+  that does not require an env rebuild. Ultimately, once the fix is merged
+  into the real upstream `WRiegs/Squidly` and released, repoint the pin again
+  from the fork to that upstream release.
