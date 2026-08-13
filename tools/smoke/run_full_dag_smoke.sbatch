@@ -16,7 +16,7 @@
 # Logs MUST be on shared storage; the override above puts them under the repo.
 set -euo pipefail
 
-STRUCTUREZYME_ENV="${STRUCTUREZYME_ENV:-/mnt/storage01/home/lherrmann/envs/structurezyme}"
+STRUCTUREZYME_ENV="${STRUCTUREZYME_ENV:-/mnt/labs/data/mora/envs/structurezyme}"
 FASTRELAX_ENV="${FASTRELAX_ENV:-/mnt/labs/data/mora/software/RosettaFastRelax/env}"
 export FASTRELAX_ENV
 source "$(conda info --base)/etc/profile.d/conda.sh"

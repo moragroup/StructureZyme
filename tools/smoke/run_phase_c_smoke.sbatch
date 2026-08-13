@@ -38,6 +38,7 @@ python "$REPO_ROOT/tools/smoke/run_phase_c_smoke.py" \
 
 echo "---- VALIDATION ----"
 python - <<PY
+import sys
 import pandas as pd, pathlib
 out = pathlib.Path("${OUTPUT_DIR}")
 
@@ -61,4 +62,5 @@ for p in finals:
 
 ok = sq is not None and boltz is not None and len(vina_pdbs) > 0 and len(finals) > 0
 print("SMOKE VALIDATION:", "PASS" if ok else "FAIL")
+sys.exit(0 if ok else 1)
 PY

@@ -150,11 +150,12 @@ def _select_top_k(paths: list[str], confidence: dict, engine: str, top_k: int) -
 
 
 def _assign_resname(prefix: str, index: int) -> str:
-    """Return a 3-letter code like `S01`, `C12`.
+    """Return a 3-letter code like `X01`, `Z12`.
 
-    `prefix` is 'S' (substrate) or 'C' (cofactor). `index` is 1-based
+    `prefix` is 'X' (substrate) or 'Z' (cofactor). `index` is 1-based
     and must fit in 2 digits (max 99 unique ligands per class per run,
-    which is plenty for enzyme screening).
+    which is plenty for enzyme screening). PLACER's auto ligand-resname
+    resolver keys off these `X0N`/`Z0N` codes (see PLACER_step).
     """
     if index < 1 or index > 99:
         raise ValueError(
