@@ -18,12 +18,14 @@ _No active workarounds at present._
   whose ensemble probabilities never exceed 0.6 (e.g. flavin monooxygenases
   without a canonical Cys-His-His triad) this yielded an empty residue string.
 
-- **Fix**: patched in the fork
-  <https://github.com/HerrLuca99/Squidly> on branch
-  `fix/forward-mean-prob-mean-var-cli` (commit `022fa40`), which appends
+- **Fix**: resolved in public upstream `WRiegs/Squidly@main`, which now appends
   `['--mean_prob', str(mean_prob), '--mean_var', str(mean_var)]` to every
-  `cmd = [...]` build in the ensemble path of `run`. `environment.yml` pins
-  `squidly` to that branch, so the fix is guaranteed on any env rebuild.
+  `cmd = [...]` build in the ensemble path of `run` and ships
+  `tests/test_cli_forwards_thresholds.py` as a regression guard. `environment.yml`
+  pins `squidly` to the immutable upstream commit
+  `58a8f7d6cac128c4d0915835d20ecb575cb72931`, so the fix is guaranteed on any env
+  rebuild. (An earlier personal fork `HerrLuca99/Squidly@022fa40` carried the same
+  fix before it landed upstream; it is no longer used.)
 
 - **Workaround removed**: the local threshold-recompute in
   `Squidly.execute` (`_select_residues_from_ensemble` + the
@@ -35,11 +37,6 @@ _No active workarounds at present._
   `tests/test_squidly_threshold_wiring.py` still verifies the thresholds are
   forwarded from run config into `Squidly()` and onto the CLI.
 
-- **Follow-up**: `environment.yml` currently pins the fork at
-  `github.com/HerrLuca99/Squidly` (commit `022fa40`) because the intended org
-  fork `github.com/moragroup/Squidly` does not exist yet (see Task 8). Once
-  the org fork is created (same commit `022fa40`), repoint the `squidly` pin
-  in `environment.yml` to `github.com/moragroup/Squidly` — a one-line change
-  that does not require an env rebuild. Ultimately, once the fix is merged
-  into the real upstream `WRiegs/Squidly` and released, repoint the pin again
-  from the fork to that upstream release.
+- **Follow-up**: upstream has no tagged release, so `environment.yml` pins a bare
+  commit. Bump the pin to a proper version once `WRiegs/Squidly` cuts a tagged
+  release.

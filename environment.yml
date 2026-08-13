@@ -26,16 +26,12 @@ dependencies:
     - docko
     - chai_lab
     - cuequivariance_torch==0.10.0
-    # Pinned to the fork branch that fixes the upstream CLI dropping
-    # --mean_prob/--mean_var before invoking the inner ensemble worker
-    # (upstream https://github.com/WRiegs/Squidly is unpatched as of 2026-08).
-    # This pin is what makes the local threshold-recompute workaround in
-    # structurezyme/steps/squidly_step.py unnecessary. Pinned to the immutable
-    # commit (not the branch) for reproducible rebuilds; the commit is on branch
-    # fix/forward-mean-prob-mean-var-cli. Repoint at an upstream release once the
-    # fix is merged into WRiegs/Squidly.
-    - squidly @ git+https://github.com/HerrLuca99/Squidly.git@022fa40  # catalytic-residue prediction CLI; requires GPU for ESM2 inference
-    # TODO(Task 8): repoint to git+https://github.com/moragroup/Squidly.git@022fa40 once the org fork exists (one-line change, no env rebuild needed).
+    # Upstream now forwards --mean_prob/--mean_var to the ensemble worker
+    # (the bug that once required a personal fork; fixed on WRiegs/Squidly@main,
+    # which ships tests/test_cli_forwards_thresholds.py guarding it). Pinned to
+    # the immutable commit rather than the moving branch for reproducible
+    # rebuilds. Bump to a tagged release once upstream cuts one.
+    - squidly @ git+https://github.com/WRiegs/Squidly.git@58a8f7d6cac128c4d0915835d20ecb575cb72931  # catalytic-residue prediction CLI; requires GPU for ESM2 inference
     - pydantic
     - pyyaml
     - filelock
