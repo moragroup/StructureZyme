@@ -16,7 +16,10 @@ not require PyRosetta to be installed.
 """
 from __future__ import annotations
 
+import json
 import logging
+import os
+import subprocess
 from pathlib import Path
 from typing import Literal
 
@@ -41,16 +44,71 @@ logger = logging.getLogger(__name__)
 _pyrosetta_initialized = False
 
 
-def _pyrosetta_available() -> bool:
-    """True if `pyrosetta` is importable in the current environment.
+_DEFAULT_FASTRELAX_ENV = "/mnt/labs/data/mora/software/RosettaFastRelax/env"
 
-    Mirrors `_squidly_cli_available` in `tests/test_squidly_step.py`:
-    used to gate smoke tests that require the actual Rosetta binary.
+
+def _resolve_fastrelax_python() -> Path:
+    """Return the RosettaFastRelax venv python.
+
+    Honors env var ``FASTRELAX_ENV`` (an env *directory*; python is
+    ``<env>/bin/python``); falls back to the shared install default.
+    Raises FileNotFoundError with an actionable message if absent.
+    """
+    env_dir = os.environ.get("FASTRELAX_ENV", _DEFAULT_FASTRELAX_ENV)
+    python = Path(env_dir) / "bin" / "python"
+    try:
+        exists = python.exists()
+    except OSError:
+        exists = False
+    if not exists:
+        raise FileNotFoundError(
+            f"FastRelax pyrosetta env python not found at {python}. "
+            f"Set FASTRELAX_ENV to the RosettaFastRelax env dir or install it "
+            f"(see /mnt/labs/data/mora/software/RosettaFastRelax/)."
+        )
+    return python
+
+
+def _worker_path() -> Path:
+    """Absolute path to the standalone pyrosetta worker script."""
+    return Path(__file__).with_name("_fastrelax_worker.py")
+
+
+def _parse_worker_stdout(stdout: str) -> tuple[str, float]:
+    """Parse the worker's last stdout line as JSON -> (relaxed_path, score).
+
+    Raises RuntimeError if the line is missing, not JSON, carries an
+    ``error`` key, or lacks the expected result keys.
+    """
+    lines = [ln for ln in stdout.splitlines() if ln.strip()]
+    if not lines:
+        raise RuntimeError("FastRelax worker produced no output")
+    try:
+        payload = json.loads(lines[-1])
+    except json.JSONDecodeError as e:
+        raise RuntimeError(
+            f"FastRelax worker stdout not JSON: {lines[-1]!r}"
+        ) from e
+    if "error" in payload:
+        raise RuntimeError(f"FastRelax worker error: {payload['error']}")
+    if "relaxed_path" not in payload or "score" not in payload:
+        raise RuntimeError(
+            f"FastRelax worker returned unexpected payload: {payload!r}"
+        )
+    return str(payload["relaxed_path"]), float(payload["score"])
+
+
+def _pyrosetta_available() -> bool:
+    """True iff the external RosettaFastRelax venv python is reachable.
+
+    Used to gate smoke tests that run real Rosetta via subprocess. Does NOT
+    import pyrosetta in-process (pyrosetta lives in a separate venv, not the
+    structurezyme env). Honors FASTRELAX_ENV.
     """
     try:
-        import pyrosetta  # noqa: F401
+        _resolve_fastrelax_python()
         return True
-    except Exception:
+    except FileNotFoundError:
         return False
 
 
