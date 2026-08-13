@@ -1,0 +1,175 @@
+# StructureZyme lab-handoff — change summary
+
+Branch: `chore/lab-handoff` (off `lab-sanity-run_LCH`), **10 commits ahead, 0 behind**.
+Status: **local only — not pushed, merged, or PR'd.** Awaiting your review.
+
+Goal: make the `structurezyme` project (formerly `filterzyme`) installable and
+runnable by other lab members from a shared location, without maintainer-specific
+paths, credentials, or a broken test suite.
+
+---
+
+## What changed (by theme)
+
+### 1. Test suite is green on a fresh checkout
+- Added `pyproject.toml` with `testpaths = ["tests"]` so `tools/` dev-smoke tests
+  are excluded from default collection.
+- `structurezyme/steps/PLACER_step.py`: added a `_path_exists()` helper that treats
+  un-statable paths (PermissionError on the shared filesystem) as "not found" instead
+  of crashing `PLACER.__init__`'s validation. Retargeted two brittle tests at
+  `tmp_path`.
+- `structurezyme/pipeline.py`: fixed a real regression — `PathsConfig.input_csv`
+  became required, but the legacy `Pipeline` adapter never set it, so every
+  `Pipeline(...).run()` raised. Now points `input_csv` at the `_input` checkpoint
+  pickle the adapter already seeds (the Runner short-circuits CSV loading when that
+  pickle exists, so it is never read as a CSV). Independently reviewed as correct.
+- `tools/test_pipeline.py`: fixed stale assertions and rewrote 3 tests to stub at the
+  modern `registry.STEPS[...].runner` level instead of legacy classes the current
+  Pipeline no longer constructs.
+
+### 2. SLURM scripts are multi-user (no personal env/repo paths)
+- Every sbatch/shell launcher under `tools/` now activates an **overridable** env:
+  ```bash
+  STRUCTUREZYME_ENV="${STRUCTUREZYME_ENV:-/mnt/labs/data/mora/envs/structurezyme}"
+  source "$(conda info --base)/etc/profile.d/conda.sh"
+  conda activate "$STRUCTUREZYME_ENV"
+  ```
+  (replacing hardcoded `/mnt/storage01/home/lherrmann/envs/filterzyme` /
+  `$HOME/envs/filterzyme`).
+- `tools/fmo18/submit_fmo18.sbatch`: env + worktree made overridable
+  (`STRUCTUREZYME_REPO`), `ENV_PY` resolved via `command -v python` after activation.
+- `tools/smoke/run_smoke_on_gpu.sh`: replaced a hardcoded personal repo `cd` with a
+  `STRUCTUREZYME_REPO`-overridable repo-root derivation (caught in review).
+
+### 3. Unified, reproducible install
+- `README.md`: install collapsed to the standard three lines —
+  `conda env create -f environment.yml` / `conda activate structurezyme` /
+  `pip install -e .` (removed the `setup.py sdist`, legacy-resolver, hardcoded tarball,
+  and `enzymetk==0.0.8` steps).
+- `environment.yml`: pinned `enzymetk==0.1.0`, added `cuequivariance_torch==0.10.0`,
+  added `pytest` (fresh env could not run the suite without it), removed the stale
+  self-referential `filterzyme` comment.
+- `docs/getting_started.md`: removed the standalone `pip install squidly` (it pulled
+  unpatched upstream and reintroduced the empty-residue bug); text now notes squidly
+  comes from `environment.yml`.
+
+### 4. squidly pinned to a reachable, patched fork (with a TODO to move to the org)
+- `environment.yml` pins
+  `squidly @ git+https://github.com/HerrLuca99/Squidly.git@022fa40` — the patched fork
+  that fixes upstream dropping `--mean_prob`/`--mean_var` before the ensemble worker.
+- The intended org fork `github.com/moragroup/Squidly` **does not exist yet** (verified
+  404), so a `TODO(Task 8)` in `environment.yml` and a follow-up note in
+  `docs/known-issues.md` flag the one-line repoint once you create it.
+
+### 5. Repo hygiene + rename cosmetics
+- Removed `test_placer/` (a tracked scratch duplicate — older/messier copies of
+  `benchmarking/metallohydrolases/`, plus a 504 KB inspection notebook with no unique
+  analysis).
+- Added `benchmarking/README.md` (historical-scripts note) and `examples/README.md`.
+- Finished `filterzyme -> structurezyme` cosmetics in `.gitignore`, benchmark
+  `base_output_dir` strings, and a personal-path comment in `fpocket_step.py`.
+
+---
+
+## Verification evidence
+
+Fresh env built purely from `environment.yml` at
+`/mnt/storage01/home/lherrmann/envs/structurezyme` (CPU node):
+
+| Step | Result |
+|------|--------|
+| `conda env create -f environment.yml` | PASS (exit 0). enzymetk-0.1.0, cuequivariance_torch-0.10.0, squidly-0.1.0 (from pinned fork), torch-2.6.0, boltz-2.2.1, chai_lab-0.6.1 |
+| `pip install -e .` | PASS — `Successfully installed structurezyme-0.1.0` |
+| `import structurezyme` + `--version` | PASS — `0.1.0` |
+| `structurezyme --help` | PASS — lists `init/run/resume/step/status/submit` |
+| `pytest tests/ tools/test_pipeline.py` | **242 passed, 5 skipped, 0 failed** |
+| `structurezyme submit --dry-run` | PASS — renders a valid sbatch calling `structurezyme run` |
+| GPU end-to-end (Step 6) | **DEFERRED** — needs a GPU node |
+
+The 5 skips are all legitimate (2× pyrosetta not installed [licensed, intentional],
+1× PLACER real-run gated on `PLACER_SMOKE=1`+GPU, 2× squidly step needs weights+CUDA;
+squidly CLI itself detected as installed). Full detail in
+`.superpowers/sdd/task-7-report.md`.
+
+---
+
+## Commits on `chore/lab-handoff`
+
+```
+3347aa0 env: add pytest to environment.yml so a fresh env can run the test suite
+612dc30 chore(hygiene): remove test_placer scratch dir; add benchmarking/examples orientation notes
+da218c3 docs+env: unify install on 'pip install -e .', pin enzymetk/cuequivariance, pin reachable squidly fork with moragroup TODO
+c9f1c11 chore: finish filterzyme->structurezyme cosmetic rename (gitignore, benchmark output dirs, comment)
+d169261 fix(tools): de-personalize repo cd in run_smoke_on_gpu.sh
+25f2db1 fix(tools): overridable STRUCTUREZYME_ENV activation; drop hardcoded personal env paths
+ce2eba6 test: green suite on fresh checkout (pytest testpaths, tolerant PLACER path checks, fix stale pipeline smoke tests)
+f429eb3 chore: commit in-flight docstring + project-notes before handoff cleanup
+d768a3b docs(plan): lab-handoff readiness implementation plan
+d02cf6f docs(spec): lab-handoff readiness design
+```
+(`git diff --stat lab-sanity-run_LCH..chore/lab-handoff`: 35 files, +3019 / -6611.)
+
+---
+
+## Outstanding user actions
+
+These need your credentials/decisions and were intentionally NOT done automatically.
+
+### A. Create the `moragroup/Squidly` org fork (GitHub)
+Fork `github.com/HerrLuca99/Squidly` (branch `fix/forward-mean-prob-mean-var-cli`,
+commit `022fa40`) into `github.com/moragroup/Squidly`. Then repoint the pin (one line,
+no env rebuild):
+- `environment.yml:36` → `squidly @ git+https://github.com/moragroup/Squidly.git@022fa40`
+- update the `TODO(Task 8)` note and `docs/known-issues.md` accordingly.
+If the org fork lands on a different commit/branch, update the pin and re-run the
+Task 7 Step 1–4 env verification.
+
+### B. GPU end-to-end sanity run (Task 7 Step 6, deferred)
+On a GPU node, against the new env:
+```bash
+STRUCTUREZYME_ENV=/mnt/storage01/home/lherrmann/envs/structurezyme \
+  sbatch tools/gpu_run/run_allmodules.sbatch   # or a tools/smoke/ variant
+```
+Confirm the pipeline runs the enabled steps and writes a manifest. (Ping me with a
+node and I'll drive this.)
+
+### C. Delete stale artifacts — WHEN YOU'RE READY (you chose: not now)
+Both still exist; run these only once you're confident in the new env:
+```bash
+rm -rf /mnt/storage01/home/lherrmann/StructureZyme          # stale CamelCase ancestor checkout
+conda env remove -p /mnt/storage01/home/lherrmann/envs/filterzyme   # old working env
+```
+
+### D. Move to the shared lab location (recommendation only — you perform the move)
+Host profiles already default `output_root` etc. under `/mnt/labs/data/mora/...`.
+Recommended shared locations:
+- code: `/mnt/labs/data/mora/code/structurezyme` (sibling of existing `.../code/*`)
+- env:  `/mnt/labs/data/mora/envs/structurezyme` (the sbatch `STRUCTUREZYME_ENV` default;
+  `/mnt/labs/data/mora/envs` is already group-writable)
+
+Rebuild the env at the shared path rather than copying the prefix (conda envs are not
+relocatable):
+```bash
+conda env create -f environment.yml -p /mnt/labs/data/mora/envs/structurezyme
+conda run -p /mnt/labs/data/mora/envs/structurezyme pip install -e /mnt/labs/data/mora/code/structurezyme
+```
+
+### E. Branch disposition (no push/merge without your OK)
+`chore/lab-handoff` is 10 ahead / 0 behind `lab-sanity-run_LCH` (clean fast-forward).
+When you approve, either merge locally (`git checkout lab-sanity-run_LCH && git merge --ff-only chore/lab-handoff`)
+and/or push. I will not do this without an explicit go-ahead.
+
+---
+
+## Non-blocking follow-ups noted during verification
+- `environment.yml` pins `openmm==8.3.1` (conda) but pip's `boltz`/`chai_lab` downgrade
+  it to 8.1.1 during the build (noisy uninstall/reinstall; env still works). Consider
+  aligning or dropping the pin.
+- `setup.py:50` `install_requires` lists unpinned `enzymetk` (environment.yml pins
+  `0.1.0`); minor inconsistency, harmless since environment.yml drives the env.
+- Minor test-file nit: `tools/test_pipeline.py`'s directory-glob assertion is coupled to
+  the `output_root/user/run_id` depth; could derive from `ctx.layout.root` instead.
+
+## Explicitly out of scope (scientific, not handoff)
+Best-pose energy-awareness beyond the merged `fused_rank`; multi-substrate schema;
+bring-your-own-PDB single-module runs.
