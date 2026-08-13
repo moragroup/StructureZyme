@@ -43,11 +43,9 @@ dependencies:
     #   2. run_boltz_affinity() upstream takes 5 args, but enzymetk's
     #      dock_boltz_step calls it with 6 (a trailing `args` list); patched to
     #      accept a configurable `args` param and run boltz via subprocess.
-    # Pinned to the patched fork off ArianeMora/docko@d3273dd (v0.1.4).
-    # TODO(docko-fork): after pushing the local commit c596dee (branch
-    # fix/mk-prepare-ligand-no-conda-run) to moragroup/docko, replace
-    # REPLACE_WITH_SHA below with the pushed commit SHA.
-    - docko @ git+https://github.com/moragroup/docko.git@REPLACE_WITH_SHA
+    # Pinned to the patched fork off ArianeMora/docko@d3273dd (v0.1.4), living at
+    # moragroup/docko branch fix/mk-prepare-ligand-no-conda-run (commit c596dee).
+    - docko @ git+https://github.com/moragroup/docko.git@c596dee36c2f796a9ad03c3f5ce65e7e7c20490e
     - chai_lab
     - cuequivariance_torch==0.10.0
     # Upstream now forwards --mean_prob/--mean_var to the ensemble worker
