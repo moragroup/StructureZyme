@@ -21,6 +21,7 @@ This module currently provides:
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 
 import pandas as pd
@@ -28,6 +29,82 @@ import pandas as pd
 from structurezyme.steps.step import Step
 
 logger = logging.getLogger(__name__)
+
+# FastRelax renames the substrate ligand to X0N and cofactors to Z0N
+# (see fastrelax_step._assign_resname). PLACER predicts the substrate and
+# leaves cofactors fixed.
+_SUBSTRATE_RESNAME_RE = re.compile(r"^X\d{2}$")
+_COFACTOR_RESNAME_RE = re.compile(r"^Z\d{2}$")
+
+# Residues that are never the predicted ligand (standard amino acids plus
+# common ions/water). Used only by the "sole remaining ligand" branch of the
+# auto resolver.
+_STANDARD_RESIDUES = frozenset(
+    {
+        "ALA", "ARG", "ASN", "ASP", "CYS", "GLN", "GLU", "GLY", "HIS", "ILE",
+        "LEU", "LYS", "MET", "PHE", "PRO", "SER", "THR", "TRP", "TYR", "VAL",
+        "SEC", "PYL", "MSE",
+        "HOH", "WAT", "H2O", "DOD",
+        "NA", "CL", "MG", "ZN", "CA", "K", "MN", "FE", "CU", "CO", "NI",
+        "SO4", "PO4",
+    }
+)
+
+
+def _distinct_hetatm_resnames(pdb_path: Path | str) -> list[str]:
+    """Return the distinct HETATM residue names in a PDB, in first-seen order.
+
+    Reads the resName field (columns 18-20) of ``HETATM`` lines, mirroring
+    ``_count_ligands``. Returns an empty list on any read error.
+    """
+    seen: list[str] = []
+    seen_set: set[str] = set()
+    try:
+        with open(pdb_path, "r") as f:
+            for line in f:
+                if line.startswith("HETATM"):
+                    res_name = line[17:20].strip()
+                    if res_name and res_name not in seen_set:
+                        seen_set.add(res_name)
+                        seen.append(res_name)
+    except Exception:
+        return []
+    return seen
+
+
+def _resolve_predict_ligand(pdb_path: Path | str) -> str:
+    """Resolve which ligand resname PLACER should predict for this PDB.
+
+    Rule (see spec 2026-08-13-placer-auto-ligand-resname-design):
+      1. Prefer the substrate: an ``X0N`` code (FastRelax) or ``LIG``
+         (pre/no-FastRelax). If both appear, prefer the ``X0N`` form.
+      2. Else, if exactly one non-cofactor, non-standard ligand remains, use it.
+      3. Else raise ``ValueError`` naming the resnames found (never guess).
+    """
+    resnames = _distinct_hetatm_resnames(pdb_path)
+
+    # 1. Substrate preference.
+    substrate = [r for r in resnames if _SUBSTRATE_RESNAME_RE.match(r)]
+    if substrate:
+        return substrate[0]
+    if "LIG" in resnames:
+        return "LIG"
+
+    # 2. Sole remaining ligand (exclude cofactors + standard residues/ions).
+    candidates = [
+        r
+        for r in resnames
+        if not _COFACTOR_RESNAME_RE.match(r) and r.upper() not in _STANDARD_RESIDUES
+    ]
+    if len(candidates) == 1:
+        return candidates[0]
+
+    raise ValueError(
+        "placer_predict_ligand='auto' could not auto-resolve the ligand for "
+        f"{pdb_path}: distinct HETATM resnames={resnames}, ligand "
+        f"candidates={candidates}. Set placer_predict_ligand explicitly "
+        "(a resname like 'X01' or 'LIG', or a 'chain-resname-resnum' triple)."
+    )
 
 
 def _method_count(best_method) -> int:
@@ -214,7 +291,9 @@ class PLACER(Step):
         """
         return self.preparedfiles_dir / f"{row[self.structure_col]}.pdb"
 
-    def _build_cmd(self, pdb_path: Path, n_ligands: int) -> list[str]:
+    def _build_cmd(
+        self, pdb_path: Path, n_ligands: int, predict_ligand: str
+    ) -> list[str]:
         """Build the full argv for a single PLACER invocation.
 
         Multi-ligand adds ``--predict_multi``; single-ligand does not (spec 386-389).
@@ -226,7 +305,7 @@ class PLACER(Step):
             "--odir", str(self.output_dir),
             "--rerank", self.rerank,
             "-n", str(self.nsamples),
-            "--predict_ligand", self.predict_ligand,
+            "--predict_ligand", predict_ligand,
         ]
         if n_ligands > 1:
             cmd.append("--predict_multi")
@@ -268,10 +347,19 @@ class PLACER(Step):
                     f"PLACER: prepared PDB not found for entry {entry}: {pdb_path}"
                 )
 
-            n_ligands = _count_ligands(pdb_path, self.predict_ligand)
-            cmd = self._build_cmd(pdb_path, n_ligands)
-
             try:
+                # Resolve the ligand resname. 'auto' inspects the prepared PDB
+                # per row (handles FastRelax's LIG->X0N rename); any other value
+                # is passed through verbatim. Resolution failures are treated
+                # like any other per-entry failure below (None scores, continue).
+                if str(self.predict_ligand).lower() == "auto":
+                    predict_ligand = _resolve_predict_ligand(pdb_path)
+                else:
+                    predict_ligand = self.predict_ligand
+
+                n_ligands = _count_ligands(pdb_path, predict_ligand)
+                cmd = self._build_cmd(pdb_path, n_ligands, predict_ligand)
+
                 result = subprocess.run(cmd, capture_output=True, text=True, check=False)
                 # Retry as single-ligand if multi-ligand crashed with AssertionError
                 # (mirrors old PLACER_forChai_step.py:150-158 fallback)
@@ -284,7 +372,7 @@ class PLACER(Step):
                         "PLACER: multi-ligand failed for %s; retrying single-ligand.",
                         entry,
                     )
-                    cmd = self._build_cmd(pdb_path, n_ligands=1)
+                    cmd = self._build_cmd(pdb_path, 1, predict_ligand)
                     result = subprocess.run(
                         cmd, capture_output=True, text=True, check=False
                     )

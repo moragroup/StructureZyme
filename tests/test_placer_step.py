@@ -280,7 +280,7 @@ def test_build_placer_cmd_single_ligand(tmp_path):
         nsamples=50,
         rerank="prmsd",
     )
-    cmd = step._build_cmd(Path("/x/foo.pdb"), n_ligands=1)
+    cmd = step._build_cmd(Path("/x/foo.pdb"), 1, "LIG")
     assert cmd == [
         str(env_root / "bin" / "python"),
         str(fake_script),
@@ -303,11 +303,11 @@ def test_build_placer_cmd_multi_ligand(tmp_path):
         placer_script_path=str(fake_script),
         placer_env_path=str(env_root),
     )
-    cmd = step._build_cmd(Path("/x/foo.pdb"), n_ligands=3)
+    cmd = step._build_cmd(Path("/x/foo.pdb"), 3, "LIG")
     # multi-ligand adds --predict_multi at the end
     assert cmd[-1] == "--predict_multi"
     # and everything before is the single-ligand form
-    assert cmd[:-1] == step._build_cmd(Path("/x/foo.pdb"), n_ligands=1)
+    assert cmd[:-1] == step._build_cmd(Path("/x/foo.pdb"), 1, "LIG")
 
 
 # ---------------------------------------------------------------------------

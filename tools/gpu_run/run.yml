@@ -60,6 +60,9 @@ steps:
     enabled: true
   placer:
     enabled: true
-    placer_predict_ligand: LIG
+    # 'auto' inspects each prepared PDB and predicts the substrate ligand,
+    # handling FastRelax's LIG->X0N rename. Override with an explicit resname
+    # (e.g. 'X01', 'LIG') or a 'chain-resname-resnum' triple if needed.
+    placer_predict_ligand: auto
     placer_nsamples: 50
     placer_rerank: prmsd

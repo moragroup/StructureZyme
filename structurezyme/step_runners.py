@@ -739,11 +739,10 @@ def run_placer(ctx, spec) -> pd.DataFrame:
     geo_dir = _geo_dir(ctx)
     num_threads = ctx.config.runtime.num_threads
 
-    predict_ligand = opts.get("placer_predict_ligand", None)
-    if predict_ligand is None:
-        raise ValueError(
-            "placer enabled but placer_predict_ligand is not set (e.g. 'A-HEM-154')"
-        )
+    # Default to 'auto': PLACER inspects each prepared PDB and picks the
+    # substrate ligand (handles FastRelax's LIG->X0N rename). An explicit
+    # resname or 'chain-resname-resnum' triple still overrides.
+    predict_ligand = opts.get("placer_predict_ligand", "auto") or "auto"
 
     geo_pkl = geo_dir / "structural_features_final.pkl"
     df_geo = pd.read_pickle(geo_pkl)
