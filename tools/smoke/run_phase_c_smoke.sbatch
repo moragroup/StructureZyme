@@ -40,11 +40,25 @@ echo "---- VALIDATION ----"
 python - <<PY
 import pandas as pd, pathlib
 out = pathlib.Path("${OUTPUT_DIR}")
-sq = out / "docking" / "squidly.pkl"
-print("squidly.pkl exists:", sq.exists())
-if sq.exists():
+
+# The pipeline writes into a timestamped subdir (out/<user>/<run_id>/...), so
+# search recursively rather than assuming a fixed path.
+sq = next(iter(out.rglob("docking/squidly.pkl")), None)
+print("squidly.pkl exists:", sq is not None)
+if sq is not None:
     df = pd.read_pickle(sq)
     print(df[[c for c in ('Entry','catalytic_residues','Squidly_CR_Position') if c in df.columns]])
-for p in out.rglob("structural_features_final.pkl"):
+
+boltz = next(iter(out.rglob("docking/boltz.pkl")), None)
+print("boltz.pkl exists:", boltz is not None)
+
+vina_pdbs = list(out.rglob("docking/vina/*/*.pdb"))
+print("vina docked PDBs:", len(vina_pdbs))
+
+finals = list(out.rglob("structural_features_final.pkl"))
+for p in finals:
     print("final pkl:", p)
+
+ok = sq is not None and boltz is not None and len(vina_pdbs) > 0 and len(finals) > 0
+print("SMOKE VALIDATION:", "PASS" if ok else "FAIL")
 PY
