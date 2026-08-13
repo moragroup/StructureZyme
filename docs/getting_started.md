@@ -128,3 +128,22 @@ sbatch tools/smoke/run_phase_c_smoke.sbatch
 On success it writes `.../geometricfiltering/structural_features_final.pkl`
 alongside per-step outputs (`docking/squidly.pkl`, `docking/boltz.pkl`,
 `docking/vina/<Entry>/*.pdb`).
+
+### Optional steps: FastRelax and PLACER
+
+Both are disabled by default and depend on shared installs (not in the conda
+env). To run the full 15-step DAG:
+
+1. Ensure the shared installs are reachable:
+   - FastRelax: `/mnt/labs/data/mora/software/RosettaFastRelax/env`
+     (or set `FASTRELAX_ENV`).
+   - PLACER: `/mnt/labs/data/mora/software/PLACER/env` (host-profile
+     `placer_env_path`).
+2. In your run config, set `steps.fastrelax.enabled: true` and
+   `steps.placer.enabled: true` (with `steps.placer.placer_predict_ligand`).
+   See `tools/gpu_run/run.yml` for a full-DAG example.
+3. Smoke it on GPU:
+   ```bash
+   mkdir -p smoke_logs
+   sbatch --output="$PWD/smoke_logs/%x_%j.out" --error="$PWD/smoke_logs/%x_%j.err" tools/smoke/run_full_dag_smoke.sbatch
+   ```

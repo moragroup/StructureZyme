@@ -124,3 +124,20 @@ Place this binary on `$PATH` (e.g. copy it into `<env>/bin/vina` and
 ```bash
 vina --version   # -> AutoDock Vina v1.2.5
 ```
+
+## FastRelax & PLACER: external, out-of-process steps (default-disabled)
+
+`fastrelax` and `placer` are opt-in steps that shell out to separate shared
+installs under `/mnt/labs/data/mora/software/`; neither pyrosetta nor PLACER is
+in `environment.yml` (both are licensed/heavy/external).
+
+- **FastRelax** runs PyRosetta in a subprocess against the RosettaFastRelax venv
+  at `/mnt/labs/data/mora/software/RosettaFastRelax/env` (py3.12). Override with
+  `FASTRELAX_ENV=<env-dir>`. Enable via `steps.fastrelax.enabled: true`. If the
+  venv is unreachable, the step raises `FileNotFoundError` at the first pose.
+- **PLACER** runs `run_PLACER.py` under `/mnt/labs/data/mora/software/PLACER/env`
+  (py3.10; weights `PLACER_model_1.pt` included). Enable via
+  `steps.placer.enabled: true` AND set `steps.placer.placer_predict_ligand`
+  (chain-resname-resnum, e.g. `A-HEM-154`, or the docked ligand resname `LIG`);
+  the step raises if it is unset. Override the env with
+  `paths.placer_env_path` or the host profile.
