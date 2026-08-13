@@ -32,10 +32,35 @@ cd "$REPO_ROOT"
 echo "host=$(hostname) python=$(which python) fastrelax_env=$FASTRELAX_ENV"
 nvidia-smi | head -20 || true
 
-python tools/gpu_run/make_input.py --output tools/gpu_run/input.pkl
-structurezyme run --config tools/gpu_run/run.yml --host default
+# Use a UNIQUE run_id per smoke so we always execute all 15 steps freshly into
+# an empty run dir. Reusing a fixed run_id (e.g. gpu-allmodules-01) makes the
+# runner skip every step whose checkpoint already exists (SKIPPED_CHECKPOINT) --
+# that would validate STALE artifacts instead of a real run, and stale pickles
+# written by a different numpy (>=2.0) can't even be read by this env's numpy
+# 1.26.x. A fresh run_id avoids both. We derive it from the SLURM job id.
+RUN_ID="smoke-${SLURM_JOB_ID:-$(date +%Y%m%d-%H%M%S)}"
+OUTPUT_ROOT="/mnt/labs/data/mora/structurezyme_runs"
+RUN_USER="lherrmann"
+RUN_DIR="${OUTPUT_ROOT}/${RUN_USER}/${RUN_ID}"
+echo "run_id=$RUN_ID run_dir=$RUN_DIR"
 
-RUN_DIR="/mnt/labs/data/mora/structurezyme_runs/lherrmann/gpu-allmodules-01"
+# Materialize a config override on shared storage with the unique run_id.
+mkdir -p "$(dirname "$RUN_DIR")"
+SMOKE_CFG="${RUN_DIR}.run.yml"
+python - "$RUN_ID" "$SMOKE_CFG" <<'PY'
+import sys, yaml
+run_id, out_cfg = sys.argv[1], sys.argv[2]
+with open("tools/gpu_run/run.yml") as fh:
+    cfg = yaml.safe_load(fh)
+cfg.setdefault("runtime", {})["run_id"] = run_id
+with open(out_cfg, "w") as fh:
+    yaml.safe_dump(cfg, fh, sort_keys=False)
+print(f"wrote {out_cfg} with runtime.run_id={run_id}")
+PY
+
+python tools/gpu_run/make_input.py --output tools/gpu_run/input.pkl
+structurezyme run --config "$SMOKE_CFG" --host default
+
 echo "---- VALIDATION ----"
 python - "$RUN_DIR" <<'PY'
 import sys, glob
@@ -66,17 +91,29 @@ def _dict_has_scores(v):
     return False
 
 
+def _safe_read_pickle(path):
+    """Read a checkpoint; on failure return (None, error-string) so a bad
+    read becomes a FAIL check instead of crashing the whole validation."""
+    try:
+        return pd.read_pickle(path), None
+    except Exception as e:  # e.g. cross-numpy-version pickle -> ModuleNotFoundError
+        return None, f"{type(e).__name__}: {e}"
+
+
 # fastrelax: checkpoint + relaxed pdbs + score column populated
 fr_ckpt = run / "checkpoints" / "fastrelax.pkl"
 check("fastrelax checkpoint exists", fr_ckpt.exists(), str(fr_ckpt))
 relaxed = list((run / "superimposition" / "fastrelax").rglob("*_relaxed.pdb"))
 check("fastrelax produced relaxed pdbs", len(relaxed) > 0, f"{len(relaxed)} files")
 if fr_ckpt.exists():
-    fr = pd.read_pickle(fr_ckpt)
-    has = "fastrelax_score" in fr.columns and any(
-        _dict_has_scores(v) for v in fr["fastrelax_score"]
-    )
-    check("fastrelax_score populated", has)
+    fr, err = _safe_read_pickle(fr_ckpt)
+    if err is not None:
+        check("fastrelax checkpoint readable", False, err)
+    else:
+        has = "fastrelax_score" in fr.columns and any(
+            _dict_has_scores(v) for v in fr["fastrelax_score"]
+        )
+        check("fastrelax_score populated", has)
 
 # placer: checkpoint + CSV + placer_* columns populated
 pl_ckpt = run / "checkpoints" / "placer.pkl"
@@ -84,14 +121,17 @@ check("placer checkpoint exists", pl_ckpt.exists(), str(pl_ckpt))
 csvs = glob.glob(str(run / "placer" / "*.csv"))
 check("placer produced a CSV", len(csvs) > 0, f"{len(csvs)} files")
 if pl_ckpt.exists():
-    pl = pd.read_pickle(pl_ckpt)
-    score_cols = [
-        c for c in pl.columns if c.startswith("placer_") and c != "placer_dir"
-    ]
-    populated = (
-        any(pl[c].notna().any() for c in score_cols) if score_cols else False
-    )
-    check("placer_* score columns populated", populated, f"cols={score_cols}")
+    pl, err = _safe_read_pickle(pl_ckpt)
+    if err is not None:
+        check("placer checkpoint readable", False, err)
+    else:
+        score_cols = [
+            c for c in pl.columns if c.startswith("placer_") and c != "placer_dir"
+        ]
+        populated = (
+            any(pl[c].notna().any() for c in score_cols) if score_cols else False
+        )
+        check("placer_* score columns populated", populated, f"cols={score_cols}")
 
 # end-to-end: final structural features pickle (written under geometricfiltering/)
 finals = list(run.rglob("structural_features_final.pkl"))
