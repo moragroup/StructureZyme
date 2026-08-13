@@ -82,13 +82,14 @@ Fresh env built purely from `environment.yml` at
 
 | Step | Result |
 |------|--------|
-| `conda env create -f environment.yml` | PASS (exit 0). enzymetk-0.1.0, cuequivariance_torch-0.10.0, squidly-0.1.0 (from pinned fork), torch-2.6.0, boltz-2.2.1, chai_lab-0.6.1 |
+| `conda env create -f environment.yml` | PASS (exit 0). enzymetk-0.1.0, cuequivariance_torch-0.10.0, squidly-0.1.0 (pinned upstream), torch-2.11.0+cu128, boltz-2.2.1, chai_lab-0.6.1, meeko-0.7.1, vina-1.2.7, docko (patched fork) |
 | `pip install -e .` | PASS — `Successfully installed structurezyme-0.1.0` |
 | `import structurezyme` + `--version` | PASS — `0.1.0` |
 | `structurezyme --help` | PASS — lists `init/run/resume/step/status/submit` |
 | `pytest tests/ tools/test_pipeline.py` | **242 passed, 5 skipped, 0 failed** |
 | `structurezyme submit --dry-run` | PASS — renders a valid sbatch calling `structurezyme run` |
-| GPU end-to-end (Step 6) | **DEFERRED** — needs a GPU node |
+| torch on GPU (Blackwell sm_120) | PASS — matmul + LSTM ok with torch 2.11.0+cu128 |
+| **GPU end-to-end (Step 6)** | **PASS** — full Squidly→Chai→Boltz→Vina→metrics on gpu partition (CalB/P41365) → `structural_features_final.pkl` (6×108, catalytic residues + cross-tool RMSDs + boltz2 affinity + vina outputs) |
 
 The 5 skips are all legitimate (2× pyrosetta not installed [licensed, intentional],
 1× PLACER real-run gated on `PLACER_SMOKE=1`+GPU, 2× squidly step needs weights+CUDA;
@@ -125,14 +126,40 @@ at upstream commit `58a8f7d`, so the personal fork and the `moragroup` org fork 
 longer needed. Optional future nicety: bump the pin to a tagged release once upstream
 cuts one.
 
-### B. GPU end-to-end sanity run (Task 7 Step 6, deferred)
-On a GPU node, against the new env:
+### A2. docko fork — PUSH REQUIRED (blocks a clean rebuild)
+The docko dependency needs two patches for a single-env install (see
+`docs/known-issues.md`). I prepared a clean fork commit but cannot push it (needs
+your GitHub credentials). `environment.yml` currently pins
+`docko @ git+https://github.com/moragroup/docko.git@REPLACE_WITH_SHA` — a
+**placeholder that will fail `conda env create` until you push the fork and fill
+in the SHA**.
+
+Steps:
+1. Create the fork under `moragroup/docko` (from `ArianeMora/docko`).
+2. Push the prepared commit. It currently lives at
+   `/tmp/lch_docko_work/docko` on branch `fix/mk-prepare-ligand-no-conda-run`
+   (local commit `c596dee`, off upstream `d3273dd` / v0.1.4). E.g.:
+   ```bash
+   cd /tmp/lch_docko_work/docko
+   git remote add moragroup git@github.com:moragroup/docko.git
+   git push moragroup fix/mk-prepare-ligand-no-conda-run
+   ```
+   (If `/tmp/lch_docko_work` has been cleared, the two-file patch is fully
+   described in `docs/known-issues.md` and can be re-applied to a fresh clone of
+   `ArianeMora/docko@d3273dd`.)
+3. Replace `REPLACE_WITH_SHA` in `environment.yml` with the pushed commit SHA.
+
+### B. GPU end-to-end sanity run (Task 7 Step 6) — DONE ✓
+Ran the full chain on the `gpu` partition against the fresh env and it passed
+end-to-end (Squidly → Chai → Boltz → Vina → docking metrics on CalB / P41365,
+producing `structural_features_final.pkl`). To re-run:
 ```bash
 STRUCTUREZYME_ENV=/mnt/storage01/home/lherrmann/envs/structurezyme \
-  sbatch tools/gpu_run/run_allmodules.sbatch   # or a tools/smoke/ variant
+  sbatch tools/smoke/run_phase_c_smoke.sbatch
 ```
-Confirm the pipeline runs the enabled steps and writes a manifest. (Ping me with a
-node and I'll drive this.)
+First-run model assets are required (see `docs/getting_started.md`): the Squidly
+weights are a **manual** `python -m squidly.download_models_hf`; ESM2/Chai/Boltz
+assets auto-download (and are already present on this server).
 
 ### C. Delete stale artifacts — WHEN YOU'RE READY (you chose: not now)
 Both still exist; run these only once you're confident in the new env:
