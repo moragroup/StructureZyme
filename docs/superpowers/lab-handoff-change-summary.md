@@ -53,13 +53,17 @@ paths, credentials, or a broken test suite.
   unpatched upstream and reintroduced the empty-residue bug); text now notes squidly
   comes from `environment.yml`.
 
-### 4. squidly pinned to a reachable, patched fork (with a TODO to move to the org)
+### 4. squidly pinned to fixed public upstream (no fork needed)
+- The `--mean_prob`/`--mean_var` forwarding bug is now **fixed in public upstream**
+  `WRiegs/Squidly@main` (verified: it forwards `threshold_args` to the ensemble worker
+  and ships `tests/test_cli_forwards_thresholds.py` as a regression guard).
 - `environment.yml` pins
-  `squidly @ git+https://github.com/HerrLuca99/Squidly.git@022fa40` — the patched fork
-  that fixes upstream dropping `--mean_prob`/`--mean_var` before the ensemble worker.
-- The intended org fork `github.com/moragroup/Squidly` **does not exist yet** (verified
-  404), so a `TODO(Task 8)` in `environment.yml` and a follow-up note in
-  `docs/known-issues.md` flag the one-line repoint once you create it.
+  `squidly @ git+https://github.com/WRiegs/Squidly.git@58a8f7d6cac128c4d0915835d20ecb575cb72931`
+  (immutable commit — upstream has no tagged release yet). This **drops the personal
+  `HerrLuca99` fork** and makes the `moragroup` org-fork step unnecessary.
+- Verified in the fresh env: squidly builds + installs from upstream, CLI on PATH, the
+  fix is present in the installed `__main__.py`, and the suite is still
+  242 passed / 5 skipped / 0 failed.
 
 ### 5. Repo hygiene + rename cosmetics
 - Removed `test_placer/` (a tracked scratch duplicate — older/messier copies of
@@ -115,14 +119,11 @@ d02cf6f docs(spec): lab-handoff readiness design
 
 These need your credentials/decisions and were intentionally NOT done automatically.
 
-### A. Create the `moragroup/Squidly` org fork (GitHub)
-Fork `github.com/HerrLuca99/Squidly` (branch `fix/forward-mean-prob-mean-var-cli`,
-commit `022fa40`) into `github.com/moragroup/Squidly`. Then repoint the pin (one line,
-no env rebuild):
-- `environment.yml:36` → `squidly @ git+https://github.com/moragroup/Squidly.git@022fa40`
-- update the `TODO(Task 8)` note and `docs/known-issues.md` accordingly.
-If the org fork lands on a different commit/branch, update the pin and re-run the
-Task 7 Step 1–4 env verification.
+### A. squidly — RESOLVED, no action needed
+The forwarding bug is fixed in public upstream `WRiegs/Squidly@main`; the pin now points
+at upstream commit `58a8f7d`, so the personal fork and the `moragroup` org fork are no
+longer needed. Optional future nicety: bump the pin to a tagged release once upstream
+cuts one.
 
 ### B. GPU end-to-end sanity run (Task 7 Step 6, deferred)
 On a GPU node, against the new env:
