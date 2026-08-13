@@ -38,12 +38,6 @@ from .step import Step
 
 logger = logging.getLogger(__name__)
 
-# Module-level guard: PyRosetta's `init()` is not safely re-entrant across
-# repeated calls in some versions. This flag ensures it runs at most once
-# per process, no matter how many `_relax_one` calls we make.
-_pyrosetta_initialized = False
-
-
 _DEFAULT_FASTRELAX_ENV = "/mnt/labs/data/mora/software/RosettaFastRelax/env"
 
 
@@ -535,104 +529,46 @@ class FastRelax(Step):
         `import structurezyme` doesn't require PyRosetta.
         """
         try:
-            import pyrosetta
-        except ImportError as e:
-            raise RuntimeError(
-                "PyRosetta is required for FastRelax; install it into the "
-                "current env (see /mnt/labs/data/mora/software/"
-                "RosettaFastRelax/ for the shared installer)."
-            ) from e
-
-        global _pyrosetta_initialized
-        try:
-            if not _pyrosetta_initialized:
-                # Pass every registered params file to Rosetta via
-                # -extra_res_fa. Without this Rosetta silently maps any
-                # unknown LIG residue to a 29-atom generic template and
-                # corrupts the ligand chemistry. See docs/known-issues.md.
-                extra_res_fa = " ".join(
-                    str(lp.params_path) for lp in self._ligand_params.values()
-                )
-                init_opts = "-mute all"
-                if extra_res_fa:
-                    init_opts = f"{init_opts} -extra_res_fa {extra_res_fa}"
-                pyrosetta.init(extra_options=init_opts, silent=True)
-                _pyrosetta_initialized = True
+            env_python = _resolve_fastrelax_python()
 
             prepared_pdb, sub_resname, cof_resname = self._prepare_pdb_for_pose(
                 pdb_path, substrate_smiles, cofactor_smiles,
             )
-            pose = pyrosetta.pose_from_pdb(str(prepared_pdb))
-            # Ligand resname used by ligand_focused mode's neighborhood
-            # selector. Prefer the substrate; fall back to the cofactor.
+            # Ligand resname used by ligand_focused mode's neighborhood selector.
+            # Prefer the substrate; fall back to the cofactor.
             ligand_resname_for_selector = sub_resname or cof_resname
-
-            movemap = None
-            movemap_factory = None
-            if self.mode == "ligand_focused":
-                from pyrosetta.rosetta.core.select.residue_selector import (
-                    NeighborhoodResidueSelector,
-                    ResidueNameSelector,
-                )
-                from pyrosetta.rosetta.core.select.movemap import (
-                    MoveMapFactory,
-                    move_map_action,
-                )
-                from pyrosetta.rosetta.protocols.constraint_generator import (
-                    AddConstraints,
-                    CoordinateConstraintGenerator,
-                )
-
-                if ligand_resname_for_selector is None:
-                    raise RuntimeError(
-                        f"FastRelax mode='ligand_focused' requires either "
-                        f"a substrate or cofactor SMILES on the row; both "
-                        f"were empty for {pdb_path}."
-                    )
-                ligand_sel = ResidueNameSelector()
-                ligand_sel.set_residue_name3(ligand_resname_for_selector)
-                shell_sel = NeighborhoodResidueSelector(
-                    ligand_sel, self.shell_radius, True
-                )
-
-                movemap_factory = MoveMapFactory()
-                movemap_factory.all_bb(False)
-                movemap_factory.all_chi(False)
-                movemap_factory.add_bb_action(move_map_action.mm_enable, shell_sel)
-                movemap_factory.add_chi_action(move_map_action.mm_enable, shell_sel)
-
-                coord_gen = CoordinateConstraintGenerator()
-                coord_gen.set_residue_selector(shell_sel)
-                coord_gen.set_sd(1.0 / max(self.constraint_weight, 1e-6))
-                add_csts = AddConstraints()
-                add_csts.add_generator(coord_gen)
-                add_csts.apply(pose)
-            elif self.mode == "full":
-                movemap = pyrosetta.MoveMap()
-                movemap.set_bb(True)
-                movemap.set_chi(True)
-            else:
-                raise ValueError(f"Unknown FastRelax mode: {self.mode!r}")
-
-            scorefxn = pyrosetta.create_score_function(self.scorefunction)
-            if self.mode == "ligand_focused":
-                from pyrosetta.rosetta.core.scoring import ScoreType
-                scorefxn.set_weight(
-                    ScoreType.coordinate_constraint, self.constraint_weight
-                )
-
-            relax = pyrosetta.rosetta.protocols.relax.FastRelax(scorefxn)
-            if movemap_factory is not None:
-                relax.set_movemap_factory(movemap_factory)
-            elif movemap is not None:
-                relax.set_movemap(movemap)
-            relax.apply(pose)
 
             self.output_dir.mkdir(parents=True, exist_ok=True)
             relaxed_path = self.output_dir / f"{Path(pdb_path).stem}_relaxed.pdb"
-            pose.dump_pdb(str(relaxed_path))
 
-            return (str(relaxed_path), float(scorefxn(pose)))
+            # Pass every registered params file to Rosetta via -extra_res_fa.
+            # Without this Rosetta silently maps any unknown LIG residue to a
+            # 29-atom generic template and corrupts the ligand chemistry.
+            extra_res_fa = [str(lp.params_path) for lp in self._ligand_params.values()]
+            spec = {
+                "prepared_pdb": str(prepared_pdb),
+                "extra_res_fa": extra_res_fa,
+                "mode": self.mode,
+                "ligand_resname": ligand_resname_for_selector,
+                "shell_radius": self.shell_radius,
+                "constraint_weight": self.constraint_weight,
+                "scorefunction": self.scorefunction,
+                "out_pdb": str(relaxed_path),
+            }
+            spec_path = self.output_dir / f"{Path(pdb_path).stem}_relax_spec.json"
+            spec_path.write_text(json.dumps(spec))
+
+            result = subprocess.run(
+                [str(env_python), str(_worker_path()), str(spec_path)],
+                capture_output=True, text=True, check=False,
+            )
+            if result.returncode != 0:
+                raise RuntimeError(
+                    f"FastRelax worker failed (rc={result.returncode}) for "
+                    f"{pdb_path}: {result.stdout[-500:]} {result.stderr[-500:]}"
+                )
+            relaxed_str, score = _parse_worker_stdout(result.stdout)
+            return (relaxed_str, score)
         except Exception as e:
             logger.error("FastRelax._relax_one failed for %s: %s", pdb_path, e)
             raise
