@@ -69,7 +69,7 @@ def _heavy_atom_count_by_resname(pdb_path: Path) -> dict[str, int]:
 
 @pytest.mark.skipif(
     not _pyrosetta_available(),
-    reason="pyrosetta is not importable in this environment",
+    reason="RosettaFastRelax venv not reachable (set FASTRELAX_ENV)",
 )
 def test_fastrelax_preserves_ligand_heavy_atom_counts(tmp_path):
     """FastRelax must NOT collapse indole (9 atoms) and FAD (53 atoms)

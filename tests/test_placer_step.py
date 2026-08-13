@@ -93,12 +93,13 @@ def test_count_ligands_missing_file(tmp_path):
 
 def test_placer_init_raises_on_missing_script(tmp_path):
     env_root = _make_fake_env(tmp_path)
+    missing_script = tmp_path / "run_PLACER.py"  # does not exist, but statable
     with pytest.raises(FileNotFoundError, match="PLACER script not found"):
         PLACER(
             preparedfiles_dir=tmp_path,
             output_dir=tmp_path,
             predict_ligand="LIG",
-            placer_script_path="/nonexistent/run_PLACER.py",
+            placer_script_path=str(missing_script),
             placer_env_path=str(env_root),
         )
 
@@ -106,13 +107,14 @@ def test_placer_init_raises_on_missing_script(tmp_path):
 def test_placer_init_raises_on_missing_env(tmp_path):
     fake_script = tmp_path / "fake_run_PLACER.py"
     fake_script.touch()
+    missing_env = tmp_path / "no_env"  # no bin/python under it
     with pytest.raises(FileNotFoundError, match="PLACER env python not found"):
         PLACER(
             preparedfiles_dir=tmp_path,
             output_dir=tmp_path,
             predict_ligand="LIG",
             placer_script_path=str(fake_script),
-            placer_env_path="/nonexistent/env",
+            placer_env_path=str(missing_env),
         )
 
 
@@ -278,7 +280,7 @@ def test_build_placer_cmd_single_ligand(tmp_path):
         nsamples=50,
         rerank="prmsd",
     )
-    cmd = step._build_cmd(Path("/x/foo.pdb"), n_ligands=1)
+    cmd = step._build_cmd(Path("/x/foo.pdb"), 1, "LIG")
     assert cmd == [
         str(env_root / "bin" / "python"),
         str(fake_script),
@@ -301,11 +303,11 @@ def test_build_placer_cmd_multi_ligand(tmp_path):
         placer_script_path=str(fake_script),
         placer_env_path=str(env_root),
     )
-    cmd = step._build_cmd(Path("/x/foo.pdb"), n_ligands=3)
+    cmd = step._build_cmd(Path("/x/foo.pdb"), 3, "LIG")
     # multi-ligand adds --predict_multi at the end
     assert cmd[-1] == "--predict_multi"
     # and everything before is the single-ligand form
-    assert cmd[:-1] == step._build_cmd(Path("/x/foo.pdb"), n_ligands=1)
+    assert cmd[:-1] == step._build_cmd(Path("/x/foo.pdb"), 1, "LIG")
 
 
 # ---------------------------------------------------------------------------

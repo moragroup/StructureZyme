@@ -17,23 +17,43 @@ dependencies:
   - fpocket
   - pip
   - plip
+  - pytest  # test runner (needed to run the unit suite in tests/)
+  - meeko==0.7.1  # provides mk_prepare_ligand.py for the Vina docking step
   - pip:
     # NOTE: after creating this env, install the package itself with: pip install -e .
-    - enzymetk
-    # - filterzyme  # removed: self-referential; install via `pip install -e .` instead
+    #
+    # PyTorch CUDA 12.8 wheels. This cluster's GPUs include NVIDIA RTX PRO 6000
+    # Blackwell cards (compute capability sm_120), which require CUDA 12.8+.
+    # The default torch that chai_lab/boltz pull in is a cu124 build (max sm_90)
+    # and fails on Blackwell with "no kernel image is available for execution on
+    # the device". Pin the cu128 build (matches the known-good lab env) and add
+    # the PyTorch cu128 wheel index so pip can find it. Keep this BEFORE the
+    # packages that depend on torch so it resolves first.
+    - --extra-index-url https://download.pytorch.org/whl/cu128
+    - torch==2.11.0+cu128
+    - enzymetk==0.1.0
     - rdkit
     - freesasa
-    - docko
+    - vina==1.2.7  # AutoDock Vina python bindings for the docking step
+    # docko: PyPI/upstream docko needs two patches for a single-env install
+    # (see docs/known-issues.md):
+    #   1. format_ligand() hardcodes `conda run -n vina mk_prepare_ligand.py`,
+    #      assuming a separate conda env named `vina`; patched to call
+    #      mk_prepare_ligand.py directly from PATH (meeko provides it).
+    #   2. run_boltz_affinity() upstream takes 5 args, but enzymetk's
+    #      dock_boltz_step calls it with 6 (a trailing `args` list); patched to
+    #      accept a configurable `args` param and run boltz via subprocess.
+    # Pinned to the patched fork off ArianeMora/docko@d3273dd (v0.1.4), living at
+    # moragroup/docko branch fix/mk-prepare-ligand-no-conda-run (commit c596dee).
+    - docko @ git+https://github.com/moragroup/docko.git@c596dee36c2f796a9ad03c3f5ce65e7e7c20490e
     - chai_lab
-    # Pinned to the fork branch that fixes the upstream CLI dropping
-    # --mean_prob/--mean_var before invoking the inner ensemble worker
-    # (upstream https://github.com/WRiegs/Squidly is unpatched as of 2026-08).
-    # This pin is what makes the local threshold-recompute workaround in
-    # structurezyme/steps/squidly_step.py unnecessary. Pinned to the immutable
-    # commit (not the branch) for reproducible rebuilds; the commit is on branch
-    # fix/forward-mean-prob-mean-var-cli. Repoint at an upstream release once the
-    # fix is merged into WRiegs/Squidly.
-    - squidly @ git+https://github.com/HerrLuca99/Squidly.git@022fa40  # catalytic-residue prediction CLI; requires GPU for ESM2 inference
+    - cuequivariance_torch==0.10.0
+    # Upstream now forwards --mean_prob/--mean_var to the ensemble worker
+    # (the bug that once required a personal fork; fixed on WRiegs/Squidly@main,
+    # which ships tests/test_cli_forwards_thresholds.py guarding it). Pinned to
+    # the immutable commit rather than the moving branch for reproducible
+    # rebuilds. Bump to a tagged release once upstream cuts one.
+    - squidly @ git+https://github.com/WRiegs/Squidly.git@58a8f7d6cac128c4d0915835d20ecb575cb72931  # catalytic-residue prediction CLI; requires GPU for ESM2 inference
     - pydantic
     - pyyaml
     - filelock

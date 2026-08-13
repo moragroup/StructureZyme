@@ -32,6 +32,8 @@ from pathlib import Path
 
 import pandas as pd
 
+from structurezyme.utils.helpers import iter_substrates
+
 
 # --------------------------------------------------------------------------
 # Directory / input helpers
@@ -261,6 +263,39 @@ def run_chai(ctx, spec) -> pd.DataFrame:
     return df_chai
 
 
+def _boltz_together_frame(df: pd.DataFrame) -> pd.DataFrame:
+    """Route a together-mode frame for Boltz co-docking.
+
+    substrate #0 stays the affinity binder in ``substrate_smiles``; substrate
+    #1 (if any) is written to ``cofactor_smiles`` (docko ``id:C``). Enforces the
+    2-substrate cap and rejects a 2nd substrate when a real cofactor already
+    exists, because docko can only route one extra ligand SMILES safely.
+    """
+    out = df.copy()
+    new_sub, new_cof = [], []
+    existing = out["cofactor_smiles"] if "cofactor_smiles" in out.columns else None
+    for pos, (_, row) in enumerate(out.iterrows()):
+        subs = iter_substrates(row)
+        if len(subs) > 2:
+            raise ValueError(
+                f"together-mode Boltz supports at most 2 substrates, got "
+                f"{len(subs)} for Entry={row['Entry']!r}"
+            )
+        prior = "" if existing is None else str(existing.iloc[pos] or "")
+        if prior in ("", "nan", "None"):
+            prior = ""
+        if len(subs) == 2 and prior:
+            raise ValueError(
+                f"together-mode Boltz cannot co-dock a 2nd substrate together "
+                f"with a pre-existing cofactor for Entry={row['Entry']!r}"
+            )
+        new_sub.append(subs[0][0])
+        new_cof.append(subs[1][0] if len(subs) == 2 else prior)
+    out["substrate_smiles"] = new_sub
+    out["cofactor_smiles"] = new_cof
+    return out
+
+
 def run_boltz(ctx, spec) -> pd.DataFrame:
     """Port of Docking._run_boltz."""
     from enzymetk.dock_boltz_step import Boltz
@@ -270,6 +305,19 @@ def run_boltz(ctx, spec) -> pd.DataFrame:
     out_dir = _docking_dir(ctx)
     num_threads = ctx.config.runtime.num_threads
     df_chai = _first_input(ctx, spec)
+
+    # In together mode we hand Boltz a COLLAPSED frame (substrate #0 in
+    # ``substrate_smiles``, substrate #1 routed into ``cofactor_smiles``) because
+    # docko can only route one extra ligand SMILES. But the PACKED
+    # ``substrate_smiles`` (all substrates joined by ``.``) must survive into the
+    # downstream frame so the per-substrate analysis steps can re-expand it via
+    # ``iter_substrates`` and emit their ``_s{i}`` columns. So we remember the
+    # original packed values here and restore them onto the Boltz output BEFORE
+    # it is saved/returned (Boltz itself never sees the packed value).
+    packed_substrate_smiles = None
+    if ctx.config.multi_substrate_mode == "together":
+        packed_substrate_smiles = df_chai["substrate_smiles"].copy()
+        df_chai = _boltz_together_frame(df_chai)
 
     boltz_dir = out_dir / "boltz/"
     boltz_dir.mkdir(exist_ok=True, parents=True)
@@ -283,13 +331,31 @@ def run_boltz(ctx, spec) -> pd.DataFrame:
     # cuequivariance_ops_torch); the pure-PyTorch fallback is always available.
     boltz_args.append("--no_kernels")
 
-    df_boltz = df_chai << (
-        Boltz("Entry", "Sequence", "substrate_smiles", "cofactor_smiles", boltz_dir,
-              num_threads, args=boltz_args)
-        >> Save(out_dir / "boltz.pkl")
-    )
+    # Run Boltz on the collapsed frame, restore the packed substrate_smiles, and
+    # only THEN save/persist so the downstream frame (and boltz.pkl) carries the
+    # packed value. NOTE: in together mode ``cofactor_smiles`` still holds
+    # substrate #1 downstream (that is how docko co-docked it). So substrate #1
+    # is intentionally represented twice: once in the packed ``substrate_smiles``
+    # (re-expanded by iter_substrates into its own ``_s{i}`` analysis columns)
+    # and once in ``cofactor_smiles``. Any step that reads ``cofactor_smiles`` as
+    # a genuine cofactor (e.g. geometric_filter's distance_ligand_to_cofactor)
+    # is therefore measuring against substrate #1, not a real cofactor, in
+    # together mode -- consumers must not misread it.
+    df_boltz = df_chai << Boltz(
+        "Entry", "Sequence", "substrate_smiles", "cofactor_smiles", boltz_dir,
+        num_threads, args=boltz_args)
+    if packed_substrate_smiles is not None:
+        df_boltz["substrate_smiles"] = packed_substrate_smiles.values
+    df_boltz = df_boltz << Save(out_dir / "boltz.pkl")
     df_boltz.rename(columns={"output_dir": "boltz_dir"}, inplace=True)
     return df_boltz
+
+
+def _together_skips_vina(mode: str, df: pd.DataFrame) -> bool:
+    """True when together-mode has any multi-substrate row (Vina can't co-dock)."""
+    if mode != "together":
+        return False
+    return any(len(iter_substrates(row)) > 1 for _, row in df.iterrows())
 
 
 def run_vina(ctx, spec) -> pd.DataFrame:
@@ -302,12 +368,23 @@ def run_vina(ctx, spec) -> pd.DataFrame:
         log_boxed_note,
     )
 
-    opts = _opts(ctx, "vina")
     out_dir = _docking_dir(ctx)
+    df_boltz = _first_input(ctx, spec)
+
+    if _together_skips_vina(ctx.config.multi_substrate_mode, df_boltz):
+        log_boxed_note(
+            "Skipping vina docking (together-mode co-docking) for all rows; "
+            "using chai/boltz co-folded poses."
+        )
+        df_boltz = df_boltz.copy()
+        df_boltz["vina_dir"] = pd.NA
+        df_boltz.to_pickle(out_dir / "vina.pkl")
+        return df_boltz
+
+    opts = _opts(ctx, "vina")
     num_threads = ctx.config.runtime.num_threads
     metagenomic_enzymes = opts.get("metagenomic_enzymes", 0)
     alt = opts.get("alternative_structure_for_vina", "Boltz")
-    df_boltz = _first_input(ctx, spec)
 
     vina_dir = out_dir / "vina/"
     vina_dir.mkdir(exist_ok=True, parents=True)
@@ -739,11 +816,10 @@ def run_placer(ctx, spec) -> pd.DataFrame:
     geo_dir = _geo_dir(ctx)
     num_threads = ctx.config.runtime.num_threads
 
-    predict_ligand = opts.get("placer_predict_ligand", None)
-    if predict_ligand is None:
-        raise ValueError(
-            "placer enabled but placer_predict_ligand is not set (e.g. 'A-HEM-154')"
-        )
+    # Default to 'auto': PLACER inspects each prepared PDB and picks the
+    # substrate ligand (handles FastRelax's LIG->X0N rename). An explicit
+    # resname or 'chain-resname-resnum' triple still overrides.
+    predict_ligand = opts.get("placer_predict_ligand", "auto") or "auto"
 
     geo_pkl = geo_dir / "structural_features_final.pkl"
     df_geo = pd.read_pickle(geo_pkl)

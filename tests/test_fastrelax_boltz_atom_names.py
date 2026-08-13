@@ -61,7 +61,7 @@ def _heavy_atom_count_by_resname(pdb_path: Path) -> dict[str, int]:
 
 @pytest.mark.skipif(
     not _pyrosetta_available(),
-    reason="pyrosetta is not importable in this environment",
+    reason="RosettaFastRelax venv not reachable (set FASTRELAX_ENV)",
 )
 def test_fastrelax_handles_boltz_atom_names(tmp_path):
     """FastRelax must succeed on a boltz PDB with SMILES-index atom names."""

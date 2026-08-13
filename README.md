@@ -28,9 +28,7 @@ resumable runner. A backward-compatible programmatic API is also provided.
 ```bash
 conda env create -f environment.yml
 conda activate structurezyme
-python setup.py sdist bdist_wheel
-pip install dist/structurezyme-0.1.0.tar.gz --use-deprecated=legacy-resolver
-pip install enzymetk==0.0.8
+pip install -e .
 ```
 
 > **Catalytic-residue prediction requires the `squidly` CLI** (installed via

@@ -22,7 +22,7 @@ df['cofactor_moiety'] = None
 df['id'] = df['Entry'].values
 
 
-base_output_dir = "filterzyme_output"
+base_output_dir = "structurezyme_output"
 
 if __name__ == "__main__":
 
@@ -76,4 +76,3 @@ if __name__ == "__main__":
     #df = pd.read_pickle('/nvme2/helen/masterthesis/3_manuscript/benchmark_martinez/geometricfiltering/ligandSASA.pkl')
     #filtering._plip_interactions(df)
 """
-

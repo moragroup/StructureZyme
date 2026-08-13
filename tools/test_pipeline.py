@@ -56,10 +56,14 @@ def test_pipeline_construction():
     pipeline = Pipeline(
         df=df,
         boltz_cache_dir="/tmp/fake_boltz_cache",
-        base_output_dir="/tmp/filterzyme_test_output",
+        base_output_dir="/tmp/structurezyme_test_output",
     )
     assert pipeline is not None
-    assert pipeline.squidly_model_size == "3B"
+    # squidly_model_size is forwarded into the squidly StepConfig (not kept
+    # as a Pipeline instance attribute -- see test_pipeline_accepts_squidly_kwargs
+    # for the signature-level contract, and test_adapter_maps_paths_and_step_toggles
+    # in tests/test_pipeline_adapter.py for the RunConfig plumbing).
+    assert pipeline.config.step_options("squidly")["squidly_model_size"] == "3B"
 
 
 def test_pipeline_accepts_placer_kwargs():
@@ -95,37 +99,58 @@ def test_pipeline_run_placer_without_ligand_raises():
         Pipeline(
             df=df,
             boltz_cache_dir="/tmp/fake",
-            base_output_dir="/tmp/filterzyme_test_placer_missing_ligand",
+            base_output_dir="/tmp/structurezyme_test_placer_missing_ligand",
             run_placer=True,
         )
+
+
+def _stub_all_steps_except(monkeypatch, keep, stub_df):
+    """Replace every registry step runner except `keep` with a stub that
+    returns `stub_df`.
+
+    Pipeline.run() now delegates entirely to the modular
+    ``structurezyme.registry.STEPS`` / ``Runner`` engine (it no longer
+    constructs the legacy ``Docking``/``Superimposition``/``GeometricFilters``
+    classes directly -- see structurezyme/pipeline.py's Pipeline.run and
+    structurezyme/step_runners.py). Stubbing at the registry level is the
+    current equivalent of the old ``monkeypatch.setattr(pv2.Docking, "run", ...)``
+    pattern.
+
+    When ``keep == "placer"``, the "plip" stub additionally writes
+    ``structural_features_final.pkl`` under the run's geometricfiltering dir,
+    since ``run_placer`` (structurezyme/step_runners.py) reads that fixed-name
+    file from disk rather than from the checkpoint frame passed between steps
+    (matching the legacy ``GeometricFilters.run`` -> PLACER on-disk contract).
+    """
+    from structurezyme import registry
+
+    def _stub(ctx, spec):
+        return stub_df.copy()
+
+    def _plip_stub(ctx, spec):
+        geo_dir = ctx.layout.root / "geometricfiltering"
+        geo_dir.mkdir(parents=True, exist_ok=True)
+        stub_df.to_pickle(geo_dir / "structural_features_final.pkl")
+        return stub_df.copy()
+
+    for name, spec in registry.STEPS.items():
+        if name == keep:
+            continue
+        stub = _plip_stub if (keep == "placer" and name == "plip") else _stub
+        monkeypatch.setattr(spec, "runner", stub, raising=False)
 
 
 def test_pipeline_run_placer_false_skips_placer(tmp_path, monkeypatch):
     """When run_placer=False (default), PLACER.execute is never invoked."""
     from structurezyme.pipeline import Pipeline
     from structurezyme.steps import PLACER_step
-    import structurezyme.pipeline as pv2
     import pandas as pd
 
-    # Stub upstream steps so run() short-circuits harmlessly.
-    monkeypatch.setattr(pv2.Docking, "run", lambda self: None)
-    monkeypatch.setattr(pv2.Superimposition, "run", lambda self: None)
-    monkeypatch.setattr(pv2.GeometricFilters, "run", lambda self: None)
-
-    # Create the pkl file that Superimposition would have written (read by
-    # Pipeline.run before GeometricFilters is instantiated).
-    superimp_dir = tmp_path / "superimposition"
-    superimp_dir.mkdir(parents=True)
-    pd.DataFrame({"Entry": ["e1"]}).to_pickle(superimp_dir / "ligandRMSD.pkl")
-
-    # Create the pkl file that GeometricFilters would have written.
-    geo_dir = tmp_path / "geometricfiltering"
-    geo_dir.mkdir(parents=True)
     stub_df = pd.DataFrame({
         "Entry": ["e1"], "docked_structure": ["e1"],
         "is_best": [True], "best_method": ["chai"],
     })
-    stub_df.to_pickle(geo_dir / "structural_features_final.pkl")
+    _stub_all_steps_except(monkeypatch, keep="placer", stub_df=stub_df)
 
     # Spy on PLACER.execute
     called = {"n": 0}
@@ -152,32 +177,19 @@ def test_pipeline_run_placer_true_invokes_execute(tmp_path, monkeypatch):
     """When run_placer=True, PLACER.execute is called once with the geo pkl DataFrame."""
     from structurezyme.pipeline import Pipeline
     from structurezyme.steps import PLACER_step
-    import structurezyme.pipeline as pv2
     import pandas as pd
 
-    monkeypatch.setattr(pv2.Docking, "run", lambda self: None)
-    monkeypatch.setattr(pv2.Superimposition, "run", lambda self: None)
-    monkeypatch.setattr(pv2.GeometricFilters, "run", lambda self: None)
+    stub_df = pd.DataFrame({
+        "Entry": ["e1", "e2"], "docked_structure": ["e1", "e2"],
+        "is_best": [True, False], "best_method": ["chai", "boltz"],
+    })
+    _stub_all_steps_except(monkeypatch, keep="placer", stub_df=stub_df)
 
     # Stub PLACER __init__ so it doesn't check for the real script.
     monkeypatch.setattr(
         PLACER_step.PLACER, "__init__",
         lambda self, **kwargs: setattr(self, "_kwargs", kwargs) or None,
     )
-
-    # Create the pkl file that Superimposition would have written (read by
-    # Pipeline.run before GeometricFilters is instantiated).
-    superimp_dir = tmp_path / "superimposition"
-    superimp_dir.mkdir(parents=True)
-    pd.DataFrame({"Entry": ["e1"]}).to_pickle(superimp_dir / "ligandRMSD.pkl")
-
-    geo_dir = tmp_path / "geometricfiltering"
-    geo_dir.mkdir(parents=True)
-    stub_df = pd.DataFrame({
-        "Entry": ["e1", "e2"], "docked_structure": ["e1", "e2"],
-        "is_best": [True, False], "best_method": ["chai", "boltz"],
-    })
-    stub_df.to_pickle(geo_dir / "structural_features_final.pkl")
 
     calls = []
     def spy(self, df):
@@ -202,8 +214,13 @@ def test_pipeline_run_placer_true_invokes_execute(tmp_path, monkeypatch):
     assert len(calls) == 1
     assert list(calls[0]["Entry"]) == ["e1", "e2"]
 
-    # Merged output must be persisted back to structural_features_final.pkl
-    merged = pd.read_pickle(geo_dir / "structural_features_final.pkl")
+    # Merged output must be persisted back to structural_features_final.pkl.
+    # run_placer reads/writes checkpoints/../geometricfiltering/structural_features_final.pkl
+    # under the run's own layout dir, which we don't know ahead of time (it's
+    # keyed by a fresh timestamp run_id), so discover it via glob.
+    matches = list(tmp_path.glob("*/*/geometricfiltering/structural_features_final.pkl"))
+    assert len(matches) == 1, f"expected exactly one structural_features_final.pkl, found {matches}"
+    merged = pd.read_pickle(matches[0])
     assert "placer_prmsd" in merged.columns
     assert merged.loc[merged["Entry"] == "e1", "placer_prmsd"].iloc[0] == 0.5
 
@@ -386,9 +403,21 @@ def test_pipeline_accepts_fastrelax_kwargs():
 
 
 def test_pipeline_forwards_fastrelax_kwargs_to_superimposition(tmp_path, monkeypatch):
-    """Pipeline.run() must construct Superimposition with fastrelax_* and
-    ligand_resname kwargs threaded through from Pipeline's own attrs."""
-    from unittest.mock import MagicMock
+    """Pipeline.__init__ must thread the fastrelax_* kwargs into the
+    ``fastrelax`` StepConfig, and run_fastrelax_step must construct FastRelax
+    with those same options at run time.
+
+    Pipeline.run() no longer constructs a ``Superimposition(**kwargs)``
+    instance directly -- it delegates to the modular
+    ``structurezyme.registry.STEPS`` / ``Runner`` engine, where fastrelax is
+    its own step (structurezyme/step_runners.py::run_fastrelax) driven by
+    ``RunConfig.steps.fastrelax`` options rather than constructor kwargs on a
+    Superimposition object. ``ligand_resname`` is intentionally not asserted
+    here: per test_run_fastrelax_constructs_fastrelax_step_correctly, it is no
+    longer threaded through to FastRelax (the new API is DataFrame-driven via
+    per-row substrate_smiles/cofactor_smiles); Pipeline still accepts the
+    kwarg for backward compatibility only.
+    """
     import structurezyme.pipeline as pv2
 
     df = pd.DataFrame({
@@ -398,18 +427,6 @@ def test_pipeline_forwards_fastrelax_kwargs_to_superimposition(tmp_path, monkeyp
         "substrate_name": ["x"],
         "substrate_moiety": ["[C]"],
     })
-
-    MockDocking = MagicMock()
-    MockDocking.return_value.run.return_value = None
-    MockSuperimposition = MagicMock()
-    MockSuperimposition.return_value.run.return_value = None
-    MockGeoFilters = MagicMock()
-    MockGeoFilters.return_value.run.return_value = None
-
-    monkeypatch.setattr(pv2, "Docking", MockDocking)
-    monkeypatch.setattr(pv2, "Superimposition", MockSuperimposition)
-    monkeypatch.setattr(pv2, "GeometricFilters", MockGeoFilters)
-    monkeypatch.setattr(pv2.pd, "read_pickle", lambda p: pd.DataFrame({"Entry": ["e1"]}))
 
     pipeline = pv2.Pipeline(
         df=df,
@@ -424,15 +441,42 @@ def test_pipeline_forwards_fastrelax_kwargs_to_superimposition(tmp_path, monkeyp
         fastrelax_scorefunction="beta_nov16",
         ligand_resname="XYZ",
     )
+
+    opts = pipeline.config.step_options("fastrelax")
+    assert pipeline.config.is_enabled("fastrelax") is True
+    assert opts["fastrelax_top_k"] == 5
+    assert opts["fastrelax_mode"] == "full"
+    assert opts["fastrelax_drop_unrelaxed"] is False
+    assert opts["fastrelax_shell_radius"] == 12.0
+    assert opts["fastrelax_constraint_weight"] == 0.25
+    assert opts["fastrelax_scorefunction"] == "beta_nov16"
+
+    # Confirm run_fastrelax_step (structurezyme/step_runners.py) actually
+    # consumes these same options when the Runner reaches the fastrelax step.
+    from structurezyme import registry
+
+    stub_df = pd.DataFrame({"Entry": ["e1"]})
+
+    def _stub(ctx, spec):
+        return stub_df.copy()
+
+    fastrelax_calls = []
+
+    def _spy_fastrelax(ctx, spec):
+        fastrelax_calls.append(ctx.config.step_options("fastrelax"))
+        return stub_df.copy()
+
+    monkeypatch.setattr(registry.STEPS["fastrelax"], "runner", _spy_fastrelax, raising=False)
+    for name, spec in registry.STEPS.items():
+        if name != "fastrelax":
+            monkeypatch.setattr(spec, "runner", _stub, raising=False)
+
     pipeline.run()
 
-    MockSuperimposition.assert_called_once()
-    _, kwargs = MockSuperimposition.call_args
-    assert kwargs["run_fastrelax"] is True
-    assert kwargs["fastrelax_top_k"] == 5
-    assert kwargs["fastrelax_mode"] == "full"
-    assert kwargs["fastrelax_drop_unrelaxed"] is False
-    assert kwargs["fastrelax_shell_radius"] == 12.0
-    assert kwargs["fastrelax_constraint_weight"] == 0.25
-    assert kwargs["fastrelax_scorefunction"] == "beta_nov16"
-    assert kwargs["ligand_resname"] == "XYZ"
+    assert len(fastrelax_calls) == 1
+    assert fastrelax_calls[0]["fastrelax_top_k"] == 5
+    assert fastrelax_calls[0]["fastrelax_mode"] == "full"
+    assert fastrelax_calls[0]["fastrelax_drop_unrelaxed"] is False
+    assert fastrelax_calls[0]["fastrelax_shell_radius"] == 12.0
+    assert fastrelax_calls[0]["fastrelax_constraint_weight"] == 0.25
+    assert fastrelax_calls[0]["fastrelax_scorefunction"] == "beta_nov16"
