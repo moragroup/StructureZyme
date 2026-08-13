@@ -2,6 +2,7 @@
 import getpass
 from datetime import datetime
 from pathlib import Path
+from typing import Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -43,6 +44,7 @@ class RunConfig(BaseModel):
     paths: PathsConfig
     runtime: RuntimeConfig = RuntimeConfig()
     steps: StepsConfig = StepsConfig()
+    multi_substrate_mode: Literal["off", "separate", "together"] = "off"
 
     def validate_paths(self) -> "RunConfig":
         """Assert required paths are set. Call AFTER host defaults are applied.

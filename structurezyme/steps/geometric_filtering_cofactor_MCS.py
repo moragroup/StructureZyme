@@ -23,7 +23,7 @@ from collections import Counter
 from structurezyme.steps.step import Step
 from structurezyme.utils.helpers import get_hetatm_chain_ids, norm_l1_dist,atom_composition_fingerprint
 from structurezyme.utils.helpers import closest_ligands_by_element_composition, atom_composition_fingerprint, extract_chain_as_rdkit_mol
-from structurezyme.utils.helpers import as_mol, ensure_3d
+from structurezyme.utils.helpers import as_mol, ensure_3d, iter_substrates
 
 RDLogger.DisableLog('rdApp.warning')
 
@@ -247,6 +247,15 @@ def nearest_centroid_distance(A, B):
     D = np.sqrt(((A[:, None, :] - B[None, :, :])**2).sum(axis=2))
     return float(D.min())
 
+def _suffix_keys(result: dict, idx) -> dict:
+    """Append ``_s{idx}`` to every key of a per-substrate result dict.
+
+    idx None -> returned unchanged (single-substrate / off mode).
+    """
+    if idx is None:
+        return result
+    return {f"{k}_s{idx}": v for k, v in result.items()}
+
 def get_squidly_residue_atom_coords(pdb_path: str, residue_id_str: str):
     '''    
     Extracts the 3D coordinates of all atoms in specified residues from a PDB file.
@@ -464,108 +473,62 @@ class GeneralGeometricFiltering(Step):
                 )
 
             default_result = {
-                'distance_ligand_to_cofactor': None, 
+                'distance_ligand_to_cofactor': None,
                 'distance_ligand_to_closest_nuc': None,
-                'ligand_moiety_method': None, 
-                'cofactor_moiety_method': None
+                'ligand_moiety_method': None,
+                'cofactor_moiety_method': None,
             }
-            try: 
-                # Load full PDB structure
-                logger.info(f"Processing PDB file: {pdb_file.name}")
 
-                # Extract chain IDs of ligands
-                chain_ids = get_hetatm_chain_ids(pdb_file)
+            def _analyze(sub_smiles, sub_moiety):
+                r = {}
+                try:
+                    chain_ids = get_hetatm_chain_ids(pdb_file)
+                    ligands = [extract_chain_as_rdkit_mol(pdb_file, cid, sanitize=False)
+                               for cid in chain_ids]
+                    ligand_candidate = closest_ligands_by_element_composition(
+                        ligands, sub_smiles, top_k=1)
+                    ligand_mol = as_mol(ligand_candidate[0]) if ligand_candidate else None
+                    ligand_mol = assign_bond_orders_from_smiles(ligand_mol, sub_smiles)
+                    ligand_mol = ensure_3d(ligand_mol)
+                    ligand_centroid, lig_method, _ = moiety_centroid_with_fallbacks(
+                        ligand_mol, sub_moiety, 'ligand',
+                        grow_mcs_by_one_bond=True, use_chirality=False)
+                    r["ligand_moiety_method"] = lig_method
 
-                # Extract ligands as RDKit mol objects
-                ligands = []
-                for chain_id in chain_ids:
-                    mol  = extract_chain_as_rdkit_mol(pdb_file, chain_id, sanitize=False)
-                    ligands.append(mol)
+                    if ('cofactor_smiles' in df.columns and cofactor_smiles is not None
+                            and tool != 'vina'):
+                        cofactor_candidate = closest_ligands_by_element_composition(
+                            ligands, cofactor_smiles, top_k=1)
+                        cofactor_mol = as_mol(cofactor_candidate[0]) if cofactor_candidate else None
+                        cofactor_mol = assign_bond_orders_from_smiles(cofactor_mol, cofactor_smiles)
+                        cofactor_mol = ensure_3d(cofactor_mol)
+                        cofactor_centroid, cof_method, _ = moiety_centroid_with_fallbacks(
+                            cofactor_mol, cofactor_moiety, 'cofactor',
+                            grow_mcs_by_one_bond=True, use_chirality=False)
+                        r["cofactor_moiety_method"] = cof_method
+                        d = nearest_centroid_distance(ligand_centroid, cofactor_centroid)
+                        if d:
+                            r['distance_ligand_to_cofactor'] = d
 
-                # Get substrate mol object and assign correct bond order based on smiles
-                ligand_candidate = closest_ligands_by_element_composition(ligands, substrate_smiles, top_k=1)
-                ligand_mol = as_mol(ligand_candidate[0]) if ligand_candidate else None
-                ligand_mol = assign_bond_orders_from_smiles(ligand_mol, substrate_smiles)
-                ligand_mol  = ensure_3d(ligand_mol)
+                    all_nucs = get_all_nucs_atom_coords(pdb_file)
+                    closest = find_min_distance(ligand_centroid, all_nucs)
+                    if closest:
+                        r['distance_ligand_to_closest_nuc'] = {
+                            closest['nuc_res']: closest['distance']}
+                except Exception as e:
+                    logger.error(f"Error processing {entry_name}: {e}")
+                    r.update(default_result)
+                return r
 
-                # Find ligand substructure match with moiety of interest and calculate ligand-centroid
-                ligand_centroid, lig_method, lig_used = moiety_centroid_with_fallbacks(
-                    ligand_mol,substrate_moiety, 'ligand', grow_mcs_by_one_bond=True,
-                    use_chirality=False)
-                
-                row_result["ligand_moiety_method"] = lig_method
+            logger.info(f"Processing PDB file: {pdb_file.name}")
 
-
-                # --- Distance between ligand and cofactor ---
-
-                # Get cofactor mol object and assign correct bond order based on smiles
-                if 'cofactor_smiles' in df.columns and cofactor_smiles is not None and tool != 'vina':              
-                    cofactor_candidate = closest_ligands_by_element_composition(ligands, cofactor_smiles, top_k=1)
-                    cofactor_mol = as_mol(cofactor_candidate[0]) if cofactor_candidate else None
-                    cofactor_mol = as_mol(cofactor_candidate[0]) if cofactor_candidate else None
-                    cofactor_mol = assign_bond_orders_from_smiles(cofactor_mol, cofactor_smiles)
-                    cofactor_mol = ensure_3d(cofactor_mol)
-
-                    # Find cofactor substructure match with moiety of interest and cofactor centroid
-                    cofactor_centroid, cof_method, cof_used = moiety_centroid_with_fallbacks(
-                        cofactor_mol,
-                        cofactor_moiety,
-                        'cofactor',
-                        grow_mcs_by_one_bond=True,
-                        use_chirality=False
-                    )
-                    row_result["cofactor_moiety_method"] = cof_method
-
-                    # Minimum distance between centroids
-                    ligand_cofactor_distance = nearest_centroid_distance(ligand_centroid, cofactor_centroid)
-                    if not ligand_cofactor_distance: 
-                        logger.warning(f"Ligand-cofactor distance calculation was unsuccessful.")
-                        row_result.update(default_result)
-                        results.append(row_result)
-                        continue
-                    row_result['distance_ligand_to_cofactor'] = ligand_cofactor_distance
-
-                # --- Distance between catalytic residues and ligand ---
-
-                # # Get squidly protein atom coordinates
-                # squidly_atom_coords = get_squidly_residue_atom_coords(pdb_file, catalytic_residues)
-                # filtered_squidly_atom_coords = filter_residue_atoms(squidly_atom_coords, atom_selection)
-
-                # if not squidly_atom_coords:
-                #     logger.warning(f"No squidly residues found in {entry_name}.")
-                #     row_result.update(default_result)
-                #     results.append(row_result)
-                #     continue
-
-                # # Compute distances between squidly predicted residues and ligand moiety
-                # squidly_distance = find_min_distance_per_squidly(ligand_centroid, filtered_squidly_atom_coords)
-
-                # # store distances in a dictionary
-                # if squidly_distance:
-                #     squidly_dist_dict = {res_name: match_info['distance'] for res_name, match_info in squidly_distance.items()}
-                #     row_result['distance_ligand_to_catalytic_residues'] = squidly_dist_dict
-
-
-                # # ---Distance between sequidly predicted residues and cofactor moiety
-                # squidly_distance = find_min_distance_per_squidly(cofactor_centroid, filtered_squidly_atom_coords)
-                # # store distances in a dictionary
-                # if squidly_distance:
-                #     squidly_dist_dict = {res_name: match_info['distance'] for res_name, match_info in squidly_distance.items()}
-                #     row_result['distance_cofactor_to_catalytic_residues'] = squidly_dist_dict
-
-
-                # --- Find closest nucleophile overall
-                all_nucleophiles_coords = get_all_nucs_atom_coords(pdb_file) # Get all nucleophilic residues atom coordinates
-                closest_distance = find_min_distance(ligand_centroid, all_nucleophiles_coords) # Compute smallest distances between all nucleophilic residues and ligand
-
-                if closest_distance:
-                    closest_nuc_dict = {closest_distance['nuc_res']: closest_distance['distance']}
-                    row_result['distance_ligand_to_closest_nuc'] = closest_nuc_dict
-
-            except Exception as e:
-                logger.error(f"Error processing {entry_name}: {e}")
-                row_result.update(default_result)
-            
+            subs = iter_substrates(row)
+            row_result = {}
+            if len(subs) <= 1:
+                row_result.update(_analyze(substrate_smiles, substrate_moiety))
+            else:
+                for i, (s_smiles, _s_name, s_moiety) in enumerate(subs):
+                    row_result.update(_suffix_keys(_analyze(s_smiles, s_moiety), i))
             results.append(row_result)
 
         return results

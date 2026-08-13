@@ -592,6 +592,36 @@ def valid_file_list(val):
     return all(isinstance(p, str) and Path(p).is_file() for p in val)
 
 
+def iter_substrates(row):
+    """Yield ordered (smiles, name, moiety) tuples per substrate in a row.
+
+    ``substrate_smiles`` splits on ``.`` and defines the substrate count.
+    ``substrate_name`` and ``substrate_moiety`` split on ``|`` and are aligned
+    positionally; missing/short lists pad with "" and longer lists truncate.
+    A single-substrate row yields exactly one tuple.
+    """
+    def _get(key):
+        val = row[key] if key in row else None
+        # pandas NaN / None -> absent
+        if val is None or (isinstance(val, float) and pd.isna(val)):
+            return ""
+        return str(val)
+
+    smiles_field = _get("substrate_smiles")
+    smiles_list = [s for s in smiles_field.split(".") if s != ""]
+    n = len(smiles_list)
+
+    def _split_parallel(key):
+        raw = _get(key)
+        parts = raw.split("|") if raw != "" else []
+        parts = parts[:n] + [""] * (n - len(parts))
+        return parts
+
+    names = _split_parallel("substrate_name")
+    moieties = _split_parallel("substrate_moiety")
+    return [(smiles_list[i], names[i], moieties[i]) for i in range(n)]
+
+
 
 
 
