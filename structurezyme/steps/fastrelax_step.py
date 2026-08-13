@@ -10,9 +10,12 @@ rewrite each engine's list in place.
 
 The pure-Python parts (column validation, per-engine top-K ranking, and
 dict-key <-> file-path matching) live at module scope and are always
-importable. The PyRosetta-dependent parts (`_relax_one`) import
-`pyrosetta` lazily inside the method so that `import structurezyme` does
-not require PyRosetta to be installed.
+importable. The PyRosetta-dependent relaxation is delegated to an
+out-of-process worker (`_fastrelax_worker.py`) run via `subprocess` in a
+separate PyRosetta venv (see `_resolve_fastrelax_python`), so that
+`import structurezyme` does not require PyRosetta to be installed.
+`_relax_one` performs only the in-process RDKit pose preparation and then
+invokes the worker.
 """
 from __future__ import annotations
 
@@ -525,7 +528,9 @@ class FastRelax(Step):
         non-canonical ligand (e.g. protein-only relaxation) -- in
         which case skip this method entirely.
 
-        `pyrosetta` is imported lazily inside this method so that
+        Only the RDKit pose preparation runs in-process; the actual
+        PyRosetta relaxation is delegated to `_fastrelax_worker.py`,
+        executed via `subprocess` in a separate PyRosetta venv, so that
         `import structurezyme` doesn't require PyRosetta.
         """
         try:
